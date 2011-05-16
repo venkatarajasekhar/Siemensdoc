@@ -110,7 +110,7 @@ typedef struct {
  static int yyread(char *buf, int max_size);
  void tcl_cmt_store(QCString txt);
  void tcl_func_name(QCString txt);
- void tcl_func_args(QCString txt, bool end = TRUE);
+ void tcl_func_args(QCString txt, int line, bool end = TRUE);
  void tcl_func_body(QCString txt);
  void tcl_block_end(tcl_context* context, int line);
  void tcl_class_init(QCString txt, int line);
@@ -132,29 +132,30 @@ NONWHITE [^ \t\n]
 /* Start Conditions */
 %x QUOTE
 %x CMTHEAD
-%x CMTBRIEF
-%x CMTNAME
-%x CMTAUTHOR
-%x CMTARGS
-%x CMTRETURN
 %x FUNCARGS
+%x CMTARGS
+%x CMTRANGE
+
 %x FUNCBODY
 
 %%
 \"			yy_push_state(QUOTE);
 <QUOTE>[^\\]\"		yy_pop_state();
 
-^#%[A-Za-z]*Header(#)*$		yy_push_state(CMTHEAD);
-^#.*$
+#%[A-Za-z]*Header(#)*\n		yy_push_state(CMTHEAD);
+#%[A-Za-z]*Range{WHITE}*\n	yy_push_state(CMTRANGE);
+#%[A-Za-z]*Args{WHITE}*\n	yy_push_state(CMTARGS);
+#[^%].*\n
 
 <CMTHEAD>^[^#]				{ yy_pop_state(); yyless(0); }
 <CMTHEAD>^#Name{WHITE}*:.+\n		{ ctyp = NAME; tcl_cmt_store(yytext); }
 <CMTHEAD>^#Author{WHITE}*:.+\n		{ ctyp = AUTHOR;
-	tcl_cmt_store(yytext); }
+						tcl_cmt_store(yytext); }
 <CMTHEAD>^#Arguments{WHITE}*:.+\n	{ ctyp = ARGS; tcl_cmt_store(yytext); }
-<CMTHEAD>^#Abstract{WHITE}*:.+\n	{ ctyp = BRIEF; tcl_cmt_store(yytext); }
+<CMTHEAD>^#Abstract{WHITE}*:.+\n	{ ctyp = BRIEF;
+						tcl_cmt_store(yytext); }
 <CMTHEAD>^#Results{WHITE}*:.+\n	{ ctyp = RETURN;
-	tcl_cmt_store(yytext); }
+						tcl_cmt_store(yytext); }
 <CMTHEAD>^#{WHITE}*:.+\n		tcl_cmt_store(yytext);
 
 	/* Start new Tcl Block */
@@ -169,12 +170,18 @@ NONWHITE [^ \t\n]
 class.*\n	tcl_class_init(yytext, yylineno);
 
 	/* TODO method has to be processed seperate */
-(body|proc){WHITE}+[^\{\n]+(\{|\n)	{ tcl_func_name(yytext);
+(body|proc|method){WHITE}+[^\{\n]+(\{|\n)	{ tcl_func_name(yytext);
 	yy_push_state(FUNCARGS); }
 
-<FUNCARGS>[^\}]*\}		{ tcl_func_args(yytext);
-	yy_pop_state(); yy_push_state(FUNCBODY); }
-<FUNCARGS>[^\}\n]*\n	{ tcl_func_args(yytext, FALSE); }
+<FUNCARGS>[^\}]*\}.*\n		{ tcl_func_args(yytext, yylineno);
+				yy_pop_state(); }
+<FUNCARGS>[^\}]*\n	{ tcl_func_args(yytext, yylineno, FALSE); }
+
+<CMTRANGE>.		/* store */
+<CMTRANGE>#%		{ yy_pop_state(); yyless(0); }
+
+<CMTARGS>.		/* store */
+<CMTARGS>#%		{ yy_pop_state(); yyless(0); }
 
 <FUNCBODY>#.*\n		{ tcl_func_body(yytext); }
 <FUNCBODY>\{		{ tcl_func_body(yytext); }
@@ -185,7 +192,7 @@ class.*\n	tcl_class_init(yytext, yylineno);
 <FUNCBODY>[^ \t\{\}\"\n]*	{ tcl_func_body(yytext); }
 
 
-<*>.|\n			/* discard */
+<*>.|\n			/* discard */;
 
 %%
 //------------------------------------------------------------
@@ -223,7 +230,7 @@ void tcl_cmt_store(QCString txt)
 //! finishes an entry after the end of the block
 void tcl_block_end(tcl_context* context, int line)
 {
-	printf("Klammer zu\n");
+    printf("Klammer zu, %d\n",line);
 }
 
 //! inits new class entry
@@ -302,22 +309,48 @@ void tcl_func_name(QCString txt)
 }
 
 //! stores Argument string, if end is false, arg string has more lines
-void tcl_func_args(QCString txt, bool end)
+void tcl_func_args(QCString txt, int line, bool end)
 {
-    if(end) {
-	if(!tcl.func_args_temp.isEmpty())	//insert space
-	    tcl.func_args_temp += " ";
-	tcl.func_args_temp += txt.left(txt.length()-1);
+	if(end) {
+		QRegExp cbrace("\\}");
+		QRegExp obrace("\\{");
+		int index;
+
+		index = txt.find(cbrace);
+		if(index == -1)
+			tcl_error(__FUNCTION__,__LINE__,
+					  "should contain a brace");
+
+		if(!tcl.func_args_temp.isEmpty())	//insert space
+			tcl.func_args_temp += " ";
+		tcl.func_args_temp += txt.left(index);
 
 		// TODO Process ARGS
+		printf("%s: %s | %d\n",__FUNCTION__,
+		       (const char*)tcl.func_args_temp, line);
 
-	printf("%s: %s\n",__FUNCTION__,(const char*)tcl.func_args_temp);
+		index = txt.find(obrace);
+		if(index == -1) {
+			//no new block -> function is over after the line
+			//-> do not insert Entry to current Entry
+		} else {
+			//TODO copy entry correct
+			tcl_context next;
+			next.line0 = yylineno;
+			next.e_current = tcl.e_current;
+			tcl.e_current = NULL;
+			tcl.stack.push(&next);
+			printf("Klammer auf, %d\n",yylineno);
+		}
 
-	tcl.func_args_temp = "";  //clear storage string
-    } else {
-	txt.stripWhiteSpace(); //remove whitespace at beginning and end
-	tcl.func_args_temp += " " + txt;
-    }
+		tcl.func_args_temp = "";  //clear storage string
+
+	} else {
+		txt.stripWhiteSpace(); //remove whitespace at beginning and end
+		if(!tcl.func_args_temp.isEmpty())
+			tcl.func_args_temp += " ";
+		tcl.func_args_temp += txt;
+	}
 }
 
 //! handles the function body, including Procedure Range and Procedure Args
@@ -370,9 +403,13 @@ void TclLanguageScanner::parseInput(const char *fileName,
 	printf("Parsing '%s'...\n",fileName);
 
 	printf("Debug: %s\n", input);
+	yylineno = 0;
 
 	groupEnterFile(fileName,yylineno);
 
+	tcl.input_string = NULL;
+	tcl.input_position = 0;
+	tclscanYYrestart(tclscanYYin);
 /*****************************************
   tcl_init();
   tcl.code = NULL;
@@ -384,12 +421,25 @@ void TclLanguageScanner::parseInput(const char *fileName,
 *****************************************/
 	tcl.input_string = input;
 
+	Entry e1;
+	e1.section = Entry::FUNCTION_SEC;
+	e1.startLine = 1;
+	e1.type = "int";
+	e1.name = "k1";
+	e1.args = "int a, int b";
+	e1.lang = SrcLangExt_Tcl;
+	e1.brief = "Kurze Doku Nr.1";
+	e1.fileName = fileName;
+	root = &e1;
+
+	yylineno = 1;
 	tclscanYYlex();
 	groupLeaveFile(tcl.file_name,yylineno);
 	root->program.resize(0);
 	myFile.close();
-	tcl.input_string = NULL;
-	tcl.input_position = 0;
+
+
+
 }
 
 //! Parse file and codify.
