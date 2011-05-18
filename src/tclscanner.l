@@ -421,16 +421,34 @@ void TclLanguageScanner::parseInput(const char *fileName,
 *****************************************/
 	tcl.input_string = input;
 
-	Entry e1;
-	e1.section = Entry::FUNCTION_SEC;
-	e1.startLine = 1;
-	e1.type = "int";
-	e1.name = "k1";
-	e1.args = "int a, int b";
-	e1.lang = SrcLangExt_Tcl;
-	e1.brief = "Kurze Doku Nr.1";
-	e1.fileName = fileName;
-	root = &e1;
+	/*	Entry *e1 = new Entry;
+	e1->section = Entry::FUNCTION_SEC;
+	e1->startLine = 1;
+	e1->type = "int";
+	e1->name = "k1";
+	e1->args = "(int a, int b)";
+	e1->lang = SrcLangExt_Tcl;
+	e1->brief = "Kurze Doku Nr.1";
+	e1->fileName = fileName;
+
+	Entry *e2 = new Entry;
+	e2->section = Entry::GROUPDOC_SEC;
+	e2->groupDocType = Entry::GROUPDOC_ADD;
+	e2->name = "mem1";
+	e2->fileName = fileName;
+
+	Entry *ef = new Entry;
+	ef->name = fileName;
+	ef->section = Entry::SOURCE_SEC;
+
+	root->addSubEntry(ef);
+
+	if(strcmp(fileName,"/home/ben/Projects/doctool/tcl_examples/component.tcl") == 0) {
+	    ef->addSubEntry(e1);
+	} else {
+	    ef->addSubEntry(e2);
+	}
+	//	initGroupInfo(e1);*/
 
 	yylineno = 1;
 	tclscanYYlex();
