@@ -64,18 +64,20 @@ class tcl_context {
 	int line0; //start of segment
 	int line1; //end of segment
 	Entry *e_current;
-	Entry *e_class;
-	Entry *e_function;
-	Entry *e_namespace;
+	Entry *e_inside;
+	//	Entry *e_class;
+	//	Entry *e_function;
+	//	Entry *e_namespace;
 	//Protection prot;
 
 	tcl_context() {
 		this->line0 = 0;
 		this->line1 = 0;
 		this->e_current = NULL;
-		this->e_class = NULL;
-		this->e_function = NULL;
-		this->e_namespace = NULL;
+		this->e_inside = NULL;
+		//	this->e_class = NULL;
+		//		this->e_function = NULL;
+		//		this->e_namespace = NULL;
 	}
 };
 
@@ -97,10 +99,11 @@ static struct {
 
 	Entry* e_main; // top level entry
 	Entry* e_file; // entry of current file
-	Entry* e_class; // entry of curernt class
-	Entry* e_namespace; // entry of current namespace
-	Entry* e_function;
+	//	Entry* e_class; // entry of curernt class
+	//	Entry* e_namespace; // entry of current namespace
+	//	Entry* e_function;
 	Entry* e_current; // currently used entry
+	Entry* e_inside; // parent entry
 
 	tcl_context* t_current; // used for creating new context
 
@@ -178,8 +181,8 @@ NONWHITE [^ \t\n]
 class.*\n	tcl_class_init(yytext, yylineno);
 
 	/* TODO method has to be processed seperate */
-(body|proc|method){WHITE}+[^\{\n]+(\{|\n)	{ tcl_func_name(yytext);
-	yy_push_state(FUNCARGS); }
+^{WHITE}*(public|private|protected){0,1}{WHITE}*(body|proc|method){WHITE}+[^\{\n]+(\{|\n)	{ tcl_func_name(yytext);
+						yy_push_state(FUNCARGS); }
 
 <FUNCARGS>[^\}]*\}.*\n		{ tcl_func_args(yytext, yylineno);
 				yy_pop_state(); }
@@ -258,6 +261,7 @@ void tcl_block_start(int line)
 	} else {
 		tcl_context* c = new tcl_context();
 		c->e_current = NULL;
+		c->e_inside = tcl.e_inside;
 		tcl.stack.push(c);
 	}
 }
@@ -272,9 +276,11 @@ void tcl_block_end(tcl_context* context, int line)
 		context->e_current->endBodyLine = line;
 	}
 
-	tcl.e_namespace = context->e_namespace;
-	tcl.e_class = context->e_class;
-	tcl.e_function = context->e_function;
+	tcl.e_inside = context->e_inside;
+
+	//	tcl.e_namespace = context->e_namespace;
+	//	tcl.e_class = context->e_class;
+	//	tcl.e_function = context->e_function;
 
 }
 
@@ -293,7 +299,7 @@ void tcl_class_init(QCString txt, int line)
 		tcl_error(__FUNCTION__,__LINE__,
 			  "couldn't find an opening brace!");
 
-	yyless(index);	//put everything inluding opening brace back to scanner
+	yyless(index);	//put everything excluding opening brace back to scanner
 
 	index = txt.find(white);	//find end of "class"
 	if(index == -1)		//error
@@ -317,12 +323,10 @@ void tcl_class_init(QCString txt, int line)
 
 	//create new context
 	tcl.t_current = new tcl_context();
-	tcl.t_current->e_namespace = tcl.e_namespace;
-	tcl.t_current->e_class = tcl.e_class;
-	tcl.t_current->e_function = tcl.e_function;
+	tcl.t_current->e_inside = tcl.e_inside;
 
 	//check if some data were already collected
-	if(tcl.e_current != NULL) {
+	if(tcl.e_current != NULL) {	//todo nochmal nachdenken ob notwendig
 		tcl.e_current->name = name;
 		tcl.e_current->section = Entry::CLASS_SEC;
 
@@ -338,14 +342,13 @@ void tcl_class_init(QCString txt, int line)
 		tcl.e_current->name = name;
 		tcl.e_current->section = Entry::CLASS_SEC;
 
-		//		tcl.cl.insert(name, tcl.e_current);
-		//tcl.entry.insert(0, tcl.e_current);
+		tcl.cl.insert(name, tcl.e_current);
+		tcl.entry.insert(0, tcl.e_current);
 	}
 
-	tcl.e_file->addSubEntry(tcl.e_current);
-	//tcl.e_main->addSubEntry(tcl.e_current);
+	tcl.e_inside->addSubEntry(tcl.e_current);
 	tcl.t_current->e_current = tcl.e_current;
-	tcl.e_class = tcl.e_current;
+	tcl.e_inside = tcl.e_current;
 
 	tcl.e_current = NULL;
 	tcl.protection = Public;
@@ -356,20 +359,36 @@ void tcl_class_init(QCString txt, int line)
 //! handles function analysing
 void tcl_func_name(QCString txt)
 {
-	QCString typ, name;
+	QCString prot, typ, name;
 	QRegExp white("[ \\t]");
 	QRegExp letter("[^ \\t]");
 	int index;
 
+	txt = txt.simplifyWhiteSpace(); //remove spaces at begin + end
+	                                //+ replace multiple spaces by 1 space
 	index = txt.find(white);	//find first part of command
 	if(index == -1)		//error
 		tcl_error(__FUNCTION__,__LINE__,"couldn't find whitespace");
-	typ = txt.left(index);	//copy body/proc/method
-	txt.remove(0,index);	//remove copied string
-	index = txt.find(letter);
-	if(index == -1)		//error no name
-		tcl_error(__FUNCTION__,__LINE__,"couldn't find name");
-	txt.remove(0,index);	//remove whitespaces
+	prot = txt.left(index);
+	if(prot == "public") {
+		tcl.protection = Public;
+	} else if(prot == "private") {
+		tcl.protection = Private;
+	} else if(prot == "protected") {
+		tcl.protection = Protected;
+	} else { //no protection found
+		typ = prot;
+	}
+	txt.remove(0,index+1); //remove copied string + whitespace
+
+	if(typ.isEmpty()) { //protection was included?
+		index = txt.find(white);
+		if(index == -1)
+			tcl_error(__FUNCTION__,__LINE__,
+				  "couldn't find space after protection");
+		typ = txt.left(index);
+		txt.remove(0,index+1); //remove string + whitespace
+	}
 
 	index = txt.find(white);	//find end of name
 	if(index == -1)
@@ -379,10 +398,22 @@ void tcl_func_name(QCString txt)
 	//processing of name
 	if(typ == "body") {
 		printf("Body Function |%s|\n",(const char*)name);
-	} else if(typ == "method") {
-		//TODO
-	} else if(typ == "proc") {
-		//TODO
+	} else if(typ == "method" || typ == "proc") {
+		//check if some data were already collected
+		if(tcl.e_current != NULL) {
+			tcl.e_current->name = name;
+			tcl.e_current->type = typ;
+			tcl.e_current->protection = tcl.protection;
+			tcl.protection = Public;
+			tcl.e_current->section = Entry::FUNCTION_SEC;
+		} else {
+			tcl.e_current = tcl_entry_new();
+			tcl.e_current->name = name;
+			tcl.e_current->type = typ;
+			tcl.e_current->protection = tcl.protection;
+			tcl.protection = Public;
+			tcl.e_current->section = Entry::FUNCTION_SEC;
+		}
 	} else {
 		tcl_error(__FUNCTION__,__LINE__,"unrecongnised function typ");
 	}
@@ -410,17 +441,20 @@ void tcl_func_args(QCString txt, int line, bool end)
 		       (const char*)tcl.func_args_temp, line);
 
 		index = txt.find(obrace);
+		assert(tcl.e_current != NULL);
 		if(index == -1) {
 			//no new block -> function is over after the line
-			//-> do not insert Entry to current Entry
+			tcl.e_current->args = "{" + tcl.func_args_temp + "}";
+			tcl.e_inside->addSubEntry(tcl.e_current);
+			tcl.e_current = NULL;
 		} else {
 			tcl.t_current = new tcl_context();
 			tcl.t_current->e_current = tcl.e_current;
-			tcl.t_current->e_class = tcl.e_class;
-			tcl.t_current->e_namespace = tcl.e_namespace;
-			tcl.t_current->e_function = tcl.e_function;
+			tcl.t_current->e_inside = tcl.e_inside;
+			tcl.e_inside->addSubEntry(tcl.e_current);
 
-			tcl.e_function = tcl.e_current;
+			tcl.e_inside = tcl.e_current;
+
 			tcl.e_current = NULL;
 			tcl.stack.push(tcl.t_current);
 			printf("Klammer auf, %d\n",yylineno);
@@ -429,7 +463,7 @@ void tcl_func_args(QCString txt, int line, bool end)
 		tcl.func_args_temp = "";  //clear storage string
 
 	} else {
-		txt.stripWhiteSpace(); //remove whitespace at beginning and end
+		txt = txt.simplifyWhiteSpace();
 		if(!tcl.func_args_temp.isEmpty())
 			tcl.func_args_temp += " ";
 		tcl.func_args_temp += txt;
@@ -457,10 +491,11 @@ void tcl_init(void)
 	tcl.func_body_temp = "";
 	tcl.e_main = NULL;
 	tcl.e_file = NULL;
-	tcl.e_class = NULL;
-	tcl.e_namespace = NULL;
-	tcl.e_function = NULL;
+	//	tcl.e_class = NULL;
+	//	tcl.e_namespace = NULL;
+	//	tcl.e_function = NULL;
 	tcl.e_current = NULL;
+	tcl.e_inside = NULL;
 
 	tcl.stack.clear();
 	tcl.ns.clear();
@@ -479,6 +514,7 @@ static void tcl_parse()
 	tcl.e_file->name = tcl.file_name;
 	tcl.e_file->section = Entry::SOURCE_SEC;
 	tcl.e_main->addSubEntry(tcl.e_file);
+	tcl.e_inside = tcl.e_file;
 
 	yyrestart(yyin);
 	yylineno = 1;
