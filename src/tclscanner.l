@@ -26,7 +26,7 @@
 #include <qarray.h>
 #include <qstack.h>
 #include <qregexp.h>
-    //#include <qlist.h>
+	//#include <qlist.h>
 #include <unistd.h>
 #include <qfile.h>
 #include <qdict.h>
@@ -59,61 +59,73 @@
 
 
 //! Structure containing the current scan context
-typedef struct {
-    int type;
-    int line0; //start of segment
-    int line1; //end of segment
-    Entry *e_current;
-    Entry *e_class;
-    Entry *e_function;
-    Entry *e_namespace;
-    Protection prot;
-} tcl_context;
+class tcl_context {
+ public:
+	int line0; //start of segment
+	int line1; //end of segment
+	Entry *e_current;
+	Entry *e_class;
+	Entry *e_function;
+	Entry *e_namespace;
+	//Protection prot;
+
+	tcl_context() {
+		this->line0 = 0;
+		this->line1 = 0;
+		this->e_current = NULL;
+		this->e_class = NULL;
+		this->e_function = NULL;
+		this->e_namespace = NULL;
+	}
+};
 
 //! Structure containing all internal global variables.
- static struct {
-     CodeOutputInterface * code; // if set then we are codifying the file
-     int code_line; // current line of code
-     int code_linenumbers; // if true create line numbers in code
+static struct {
+	CodeOutputInterface * code; // if set then we are codifying the file
+	int code_line; // current line of code
+	int code_linenumbers; // if true create line numbers in code
 
-     bool config_autobrief; // value of configuration option
-     const char* input_string; // file contents
-     int input_position; // position in file
-     QCString file_name; // name of used file
-     ParserInterface *this_parser; // myself
+	bool config_autobrief; // value of configuration option
+	const char* input_string; // file contents
+	int input_position; // position in file
+	QCString file_name; // name of used file
+	ParserInterface *this_parser; // myself
 
-     //used by Helper Functions
-     int quote;
-     QCString func_args_temp;
-     int func_brace;
-     QCString func_body_temp;
+	//used by Helper Functions
+	QCString func_args_temp;
+	QCString func_body_temp;
 
-     Entry* e_main; // top level entry
-     Entry* e_file; // entry of current file
-     Entry* e_current; // currently used entry
-     Entry* e_inside; // contain entry of current scan context
+	Entry* e_main; // top level entry
+	Entry* e_file; // entry of current file
+	Entry* e_class; // entry of curernt class
+	Entry* e_namespace; // entry of current namespace
+	Entry* e_function;
+	Entry* e_current; // currently used entry
 
-     QStack<tcl_context> stack; // stack of scan contexts
-     QDict<Entry*> ns; // all read namespace entries
-     QDict<Entry*> cl; // all read class entries
-     QDict<Entry*> fn; // all read function entries
-     QList<Entry*> entry; // list of all created entries
-     Protection protection; // current protections state
+	tcl_context* t_current; // used for creating new context
+
+	QStack<tcl_context> stack; // stack of scan contexts
+	QDict<Entry> ns; // all read namespace entries
+	QDict<Entry> cl; // all read class entries
+	QDict<Entry> fn; // all read function entries
+	QList<Entry> entry; // list of all created entries
+	Protection protection; // current protections state
  } tcl;
 //------------------------------------------------------------
 // Global Vars
 // used by scanner
- enum CMTTYP { NAME, AUTHOR, BRIEF, ARGS, RETURN } ctyp;
+enum CMTTYP { NAME, AUTHOR, BRIEF, ARGS, RETURN } ctyp;
 
 //------------------------------------------------------------
 // Prototypes
- static int yyread(char *buf, int max_size);
- void tcl_cmt_store(QCString txt);
- void tcl_func_name(QCString txt);
- void tcl_func_args(QCString txt, int line, bool end = TRUE);
- void tcl_func_body(QCString txt);
- void tcl_block_end(tcl_context* context, int line);
- void tcl_class_init(QCString txt, int line);
+static int yyread(char *buf, int max_size);
+void tcl_cmt_store(QCString txt);
+void tcl_func_name(QCString txt);
+void tcl_func_args(QCString txt, int line, bool end = TRUE);
+void tcl_func_body(QCString txt);
+void tcl_block_start(int line);
+void tcl_block_end(tcl_context* context, int line);
+void tcl_class_init(QCString txt, int line);
 
 //-----------------------------------------------------------------------
 #undef YY_INPUT
@@ -127,7 +139,7 @@ NONWHITE [^ \t\n]
 %option yylineno
 %option noyywrap
 %option stack
-%option debug
+/*%option debug*/
 
 /* Start Conditions */
 %x QUOTE
@@ -159,11 +171,7 @@ NONWHITE [^ \t\n]
 <CMTHEAD>^#{WHITE}*:.+\n		tcl_cmt_store(yytext);
 
 	/* Start new Tcl Block */
-\{		{ tcl_context next; next.line0 = yylineno;
-	next.e_current = tcl.e_current;
-	tcl.e_current = NULL;
-	tcl.stack.push(&next);
-	printf("Klammer auf, %d\n",yylineno); }
+\{		tcl_block_start(yylineno);
 
 \}		{ tcl_block_end(tcl.stack.pop(), yylineno); }
 
@@ -211,7 +219,19 @@ Entry* tcl_entry_new()
 	newEntry->section = Entry::EMPTY_SEC;
 	newEntry->name = "";
 	newEntry->fileName = tcl.file_name;
+	newEntry->protection = Public;
+	initGroupInfo(newEntry);
+	tcl.entry.insert(0, newEntry);
+
 	return newEntry;
+}
+
+//! merges two entries together
+void tcl_merge_entry(Entry* e1, Entry* e2)
+{
+	// TODO
+	(void)e1;
+	(void)e2;
 }
 
 //! stores the header to the current Entry Object
@@ -227,10 +247,35 @@ void tcl_cmt_store(QCString txt)
 	}
 }
 
+//! opens a new block, stores context onto the stack
+void tcl_block_start(int line)
+{
+	printf("Klammer auf, %d\n", line);
+
+	if(tcl.t_current != NULL) {
+		tcl.stack.push(tcl.t_current);
+		tcl.t_current = NULL;
+	} else {
+		tcl_context* c = new tcl_context();
+		c->e_current = NULL;
+		tcl.stack.push(c);
+	}
+}
+
 //! finishes an entry after the end of the block
 void tcl_block_end(tcl_context* context, int line)
 {
-    printf("Klammer zu, %d\n",line);
+	printf("Klammer zu, %d\n",line);
+
+	if(context->e_current != NULL) {
+		context->e_current->bodyLine = context->line0;
+		context->e_current->endBodyLine = line;
+	}
+
+	tcl.e_namespace = context->e_namespace;
+	tcl.e_class = context->e_class;
+	tcl.e_function = context->e_function;
+
 }
 
 //! inits new class entry
@@ -269,6 +314,41 @@ void tcl_class_init(QCString txt, int line)
 	}
 
 	name = txt.left(index);
+
+	//create new context
+	tcl.t_current = new tcl_context();
+	tcl.t_current->e_namespace = tcl.e_namespace;
+	tcl.t_current->e_class = tcl.e_class;
+	tcl.t_current->e_function = tcl.e_function;
+
+	//check if some data were already collected
+	if(tcl.e_current != NULL) {
+		tcl.e_current->name = name;
+		tcl.e_current->section = Entry::CLASS_SEC;
+
+		Entry* e_lookup = tcl.cl.find(name);
+		if(e_lookup != NULL) {
+			tcl_merge_entry(e_lookup, tcl.e_current);
+		} else {
+			tcl.cl.insert((const char*)name, tcl.e_current);
+			tcl.entry.insert(0, tcl.e_current);
+		}
+	} else {
+		tcl.e_current = tcl_entry_new();
+		tcl.e_current->name = name;
+		tcl.e_current->section = Entry::CLASS_SEC;
+
+		//		tcl.cl.insert(name, tcl.e_current);
+		//tcl.entry.insert(0, tcl.e_current);
+	}
+
+	tcl.e_file->addSubEntry(tcl.e_current);
+	//tcl.e_main->addSubEntry(tcl.e_current);
+	tcl.t_current->e_current = tcl.e_current;
+	tcl.e_class = tcl.e_current;
+
+	tcl.e_current = NULL;
+	tcl.protection = Public;
 
 	printf("Klasse: |%s|\n",(const char*)name);
 }
@@ -334,12 +414,15 @@ void tcl_func_args(QCString txt, int line, bool end)
 			//no new block -> function is over after the line
 			//-> do not insert Entry to current Entry
 		} else {
-			//TODO copy entry correct
-			tcl_context next;
-			next.line0 = yylineno;
-			next.e_current = tcl.e_current;
+			tcl.t_current = new tcl_context();
+			tcl.t_current->e_current = tcl.e_current;
+			tcl.t_current->e_class = tcl.e_class;
+			tcl.t_current->e_namespace = tcl.e_namespace;
+			tcl.t_current->e_function = tcl.e_function;
+
+			tcl.e_function = tcl.e_current;
 			tcl.e_current = NULL;
-			tcl.stack.push(&next);
+			tcl.stack.push(tcl.t_current);
 			printf("Klammer auf, %d\n",yylineno);
 		}
 
@@ -356,30 +439,7 @@ void tcl_func_args(QCString txt, int line, bool end)
 //! handles the function body, including Procedure Range and Procedure Args
 void tcl_func_body(QCString txt)
 {
-	if(tcl.quote) {
-		if(txt == "\"")
-			tcl.quote = 0;
-	} else {
-		if(txt == "\"") {
-			tcl.quote = 1;
-		} else if(txt == "{") {
-			tcl.func_brace++;
-		} else if(txt == "}") {
-			tcl.func_brace--;
-			if(tcl.func_brace == 0) { //function is over
-				yy_pop_state();
-				printf("Function over\n");
-			}
-		} else if(txt == "\"") {
-
-		} else if(txt == "#%ProcedureRange") {
-			/* TODO Processing */
-		} else if(txt == "#%ProcedureArgs") {
-			/* TODO Processing */
-		} else if(txt == "#%EndArgs") {
-			/* TODO Processing */
-		}
-	}
+	(void)txt;
 }
 
 
@@ -387,14 +447,49 @@ void tcl_func_body(QCString txt)
 //! inits for tcl scanner
 void tcl_init(void)
 {
-    tcl.quote = 0;
-    tcl.func_brace = 0;
+	tcl.config_autobrief = Config_getBool("JAVADOC_AUTOBRIEF");
+	tcl.input_string = NULL;
+	tcl.input_position = 0;
+	tcl.file_name = "";
+	tcl.this_parser = NULL;
+
+	tcl.func_args_temp = "";
+	tcl.func_body_temp = "";
+	tcl.e_main = NULL;
+	tcl.e_file = NULL;
+	tcl.e_class = NULL;
+	tcl.e_namespace = NULL;
+	tcl.e_function = NULL;
+	tcl.e_current = NULL;
+
+	tcl.stack.clear();
+	tcl.ns.clear();
+	tcl.cl.clear();
+	tcl.fn.clear();
+
+	tcl.protection = Public;
+
+	yylineno = 1;
+	tclscanYYrestart(tclscanYYin);
+}
+
+static void tcl_parse()
+{
+	tcl.e_file = tcl_entry_new();
+	tcl.e_file->name = tcl.file_name;
+	tcl.e_file->section = Entry::SOURCE_SEC;
+	tcl.e_main->addSubEntry(tcl.e_file);
+
+	yyrestart(yyin);
+	yylineno = 1;
+	yylex();
 }
 
 //! Parse text file and build up entry tree.
 void TclLanguageScanner::parseInput(const char *fileName,
 				    const char *input,
-				    Entry *root) {
+				    Entry *root)
+{
 	QFile myFile;
 
 	myFile.setName(fileName);
@@ -402,24 +497,17 @@ void TclLanguageScanner::parseInput(const char *fileName,
 
 	printf("Parsing '%s'...\n",fileName);
 
-	printf("Debug: %s\n", input);
-	yylineno = 0;
+	//printf("Debug: %s\n", input);
 
 	groupEnterFile(fileName,yylineno);
 
-	tcl.input_string = NULL;
-	tcl.input_position = 0;
-	tclscanYYrestart(tclscanYYin);
-/*****************************************
-  tcl_init();
-  tcl.code = NULL;
-  tcl.input_string = input;
-  tcl.file_name = fileName;
-  tcl.this_parser = this;
-  tcl.entry_main          = root; // toplevel entry
-  tcl_parse();
-*****************************************/
+	tcl_init();
+	tcl.file_name = fileName;
 	tcl.input_string = input;
+	tcl.this_parser = this;
+	tcl.e_main = root; // toplevel entry
+	tcl_parse();
+
 
 	/*	Entry *e1 = new Entry;
 	e1->section = Entry::FUNCTION_SEC;
@@ -449,12 +537,20 @@ void TclLanguageScanner::parseInput(const char *fileName,
 	    ef->addSubEntry(e2);
 	}
 	//	initGroupInfo(e1);*/
+	if(strcmp(fileName,"/home/ben/Projects/doctool/tcl_examples/component.tcl") == 0) {
+		Entry* ec = tcl_entry_new();
+		ec->name = "Testklasse";
+		ec->section = Entry::CLASS_SEC;
+		tcl.e_file->addSubEntry(ec);
+	}
 
-	yylineno = 1;
-	tclscanYYlex();
 	groupLeaveFile(tcl.file_name,yylineno);
 	root->program.resize(0);
 	myFile.close();
+
+	/*QList<Entry> *chil = new QList<Entry>(*(root->children()));
+	Entry* en = chil->first();
+	printf("%s\n",(const char*)en->name);*/
 
 
 
