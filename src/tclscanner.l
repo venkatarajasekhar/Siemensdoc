@@ -98,10 +98,6 @@ static struct {
 	QCString func_body_temp;
 
 	Entry* e_main; // top level entry
-	Entry* e_file; // entry of current file
-	//	Entry* e_class; // entry of curernt class
-	//	Entry* e_namespace; // entry of current namespace
-	//	Entry* e_function;
 	Entry* e_current; // currently used entry
 	Entry* e_inside; // parent entry
 
@@ -253,8 +249,6 @@ void tcl_cmt_store(QCString txt)
 //! opens a new block, stores context onto the stack
 void tcl_block_start(int line)
 {
-	printf("Klammer auf, %d\n", line);
-
 	if(tcl.t_current != NULL) {
 		tcl.stack.push(tcl.t_current);
 		tcl.t_current = NULL;
@@ -269,8 +263,6 @@ void tcl_block_start(int line)
 //! finishes an entry after the end of the block
 void tcl_block_end(tcl_context* context, int line)
 {
-	printf("Klammer zu, %d\n",line);
-
 	if(context->e_current != NULL) {
 		context->e_current->bodyLine = context->line0;
 		context->e_current->endBodyLine = line;
@@ -291,8 +283,6 @@ void tcl_class_init(QCString txt, int line)
 	QRegExp white("[ \\t]");
 	QRegExp nonwhite("[^ \\t\{]");
 	int index;
-
-	printf("Text: |%s|\n", (const char*)txt);
 
 	index = txt.find('{');
 	if(index == -1)
@@ -395,9 +385,11 @@ void tcl_func_name(QCString txt)
 		tcl_error(__FUNCTION__,__LINE__,"couldn't find end of name");
 	name = txt.left(index);
 
+	printf("Funktion: |%s|\n",(const char*)name);
+
 	//processing of name
 	if(typ == "body") {
-		printf("Body Function |%s|\n",(const char*)name);
+		//TODO
 	} else if(typ == "method" || typ == "proc") {
 		//check if some data were already collected
 		if(tcl.e_current != NULL) {
@@ -448,6 +440,7 @@ void tcl_func_args(QCString txt, int line, bool end)
 			tcl.e_inside->addSubEntry(tcl.e_current);
 			tcl.e_current = NULL;
 		} else {
+			yyless(index); //push everything else back for reading
 			tcl.t_current = new tcl_context();
 			tcl.t_current->e_current = tcl.e_current;
 			tcl.t_current->e_inside = tcl.e_inside;
@@ -457,7 +450,6 @@ void tcl_func_args(QCString txt, int line, bool end)
 
 			tcl.e_current = NULL;
 			tcl.stack.push(tcl.t_current);
-			printf("Klammer auf, %d\n",yylineno);
 		}
 
 		tcl.func_args_temp = "";  //clear storage string
@@ -490,10 +482,6 @@ void tcl_init(void)
 	tcl.func_args_temp = "";
 	tcl.func_body_temp = "";
 	tcl.e_main = NULL;
-	tcl.e_file = NULL;
-	//	tcl.e_class = NULL;
-	//	tcl.e_namespace = NULL;
-	//	tcl.e_function = NULL;
 	tcl.e_current = NULL;
 	tcl.e_inside = NULL;
 
@@ -510,15 +498,21 @@ void tcl_init(void)
 
 static void tcl_parse()
 {
-	tcl.e_file = tcl_entry_new();
-	tcl.e_file->name = tcl.file_name;
-	tcl.e_file->section = Entry::SOURCE_SEC;
-	tcl.e_main->addSubEntry(tcl.e_file);
-	tcl.e_inside = tcl.e_file;
+	tcl.e_inside = tcl.e_main;
+
+	Entry* e = tcl_entry_new();
+	e->name = "ns1";
+	e->section = Entry::NAMESPACE_SEC;
+	tcl.e_inside->addSubEntry(e);
 
 	yyrestart(yyin);
 	yylineno = 1;
 	yylex();
+
+	//TODO!!
+	/*	if(!tcl.stack.isEmpty()) //check if all braces were closed
+		tcl_error(__FUNCTION__,__LINE__,
+		"Stack is not empty! File: " + tcl.file_name); */
 }
 
 //! Parse text file and build up entry tree.
@@ -573,12 +567,11 @@ void TclLanguageScanner::parseInput(const char *fileName,
 	    ef->addSubEntry(e2);
 	}
 	//	initGroupInfo(e1);*/
-	if(strcmp(fileName,"/home/ben/Projects/doctool/tcl_examples/component.tcl") == 0) {
+	/*if(strcmp(fileName,"/home/ben/Projects/doctool/tcl_examples/component.tcl") == 0) {
 		Entry* ec = tcl_entry_new();
 		ec->name = "Testklasse";
 		ec->section = Entry::CLASS_SEC;
-		tcl.e_file->addSubEntry(ec);
-	}
+		}*/
 
 	groupLeaveFile(tcl.file_name,yylineno);
 	root->program.resize(0);
