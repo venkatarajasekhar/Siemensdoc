@@ -65,19 +65,12 @@ class tcl_context {
 	int line1; //end of segment
 	Entry *e_current;
 	Entry *e_inside;
-	//	Entry *e_class;
-	//	Entry *e_function;
-	//	Entry *e_namespace;
-	//Protection prot;
 
 	tcl_context() {
 		this->line0 = 0;
 		this->line1 = 0;
 		this->e_current = NULL;
 		this->e_inside = NULL;
-		//	this->e_class = NULL;
-		//		this->e_function = NULL;
-		//		this->e_namespace = NULL;
 	}
 };
 
@@ -95,6 +88,9 @@ static struct {
 
 	//used by Helper Functions
 	QCString func_args_temp;
+	int func_args_bcnt;
+	Argument* a_current;
+
 	QCString func_body_temp;
 
 	Entry* e_main; // top level entry
@@ -120,7 +116,7 @@ enum CMTTYP { NAME, AUTHOR, BRIEF, ARGS, RETURN } ctyp;
 static int yyread(char *buf, int max_size);
 void tcl_cmt_store(QCString txt);
 void tcl_func_name(QCString txt);
-void tcl_func_args(QCString txt, int line, bool end = TRUE);
+void tcl_func_args(QCString txt, int line);
 void tcl_func_body(QCString txt);
 void tcl_block_start(int line);
 void tcl_block_end(tcl_context* context, int line);
@@ -138,7 +134,7 @@ NONWHITE [^ \t\n]
 %option yylineno
 %option noyywrap
 %option stack
-/*%option debug*/
+%option debug
 
 /* Start Conditions */
 %x QUOTE
@@ -177,12 +173,10 @@ NONWHITE [^ \t\n]
 class.*\n	tcl_class_init(yytext, yylineno);
 
 	/* TODO method has to be processed seperate */
-^{WHITE}*(public|private|protected){0,1}{WHITE}*(body|proc|method){WHITE}+[^\{\n]+(\{|\n)	{ tcl_func_name(yytext);
+^{WHITE}*(public|private|protected){0,1}{WHITE}*(body|proc|method){WHITE}+{NONWHITE}+{WHITE}+	{ tcl_func_name(yytext);
 						yy_push_state(FUNCARGS); }
 
-<FUNCARGS>[^\}]*\}.*\n		{ tcl_func_args(yytext, yylineno);
-				yy_pop_state(); }
-<FUNCARGS>[^\}]*\n	{ tcl_func_args(yytext, yylineno, FALSE); }
+<FUNCARGS>.*\n		{ tcl_func_args(yytext, yylineno); }
 
 <CMTRANGE>.		/* store */
 <CMTRANGE>#%		{ yy_pop_state(); yyless(0); }
@@ -380,10 +374,10 @@ void tcl_func_name(QCString txt)
 		txt.remove(0,index+1); //remove string + whitespace
 	}
 
-	index = txt.find(white);	//find end of name
-	if(index == -1)
-		tcl_error(__FUNCTION__,__LINE__,"couldn't find end of name");
-	name = txt.left(index);
+	//	index = txt.find(white);	//find end of name
+	//	if(index == -1)
+	//	tcl_error(__FUNCTION__,__LINE__,"couldn't find end of name");
+	name = txt;
 
 	printf("Funktion: |%s|\n",(const char*)name);
 
@@ -412,31 +406,118 @@ void tcl_func_name(QCString txt)
 }
 
 //! stores Argument string, if end is false, arg string has more lines
-void tcl_func_args(QCString txt, int line, bool end)
+void tcl_func_args(QCString txt, int line)
 {
-	if(end) {
-		QRegExp cbrace("\\}");
-		QRegExp obrace("\\{");
-		int index;
+	QRegExp cbrace("\\}"), obrace("\\{");
+	QRegExp brace("[\\}\\{]");
+	QRegExp alnum("[A-Za-z0-9_]"), nalnum("[^A-Za-z0-9_]");
+	QRegExp white("[ \\t]"), nonwhite("[^ \\t\\n]");
+	int index, len;
+	int obcnt = 0;
+	int cbcnt = 0;
 
-		index = txt.find(cbrace);
-		if(index == -1)
-			tcl_error(__FUNCTION__,__LINE__,
-					  "should contain a brace");
+	len = txt.length();
 
-		if(!tcl.func_args_temp.isEmpty())	//insert space
-			tcl.func_args_temp += " ";
-		tcl.func_args_temp += txt.left(index);
+	if(tcl.func_args_bcnt == 0) {
+		index = txt.find(obrace);
+		if(index == -1) { //proc a args command
+			index = txt.find(white);
+			if(index == -1)
+				tcl_error(__FUNCTION__,__LINE__,
+					  "should contain whitespace");
+			tcl.e_current->args = txt.left(index-1);
+		} else if(index > txt.find(alnum)) {
+			//proc a args { commands }
+			//Arguments is only 1 word
+			tcl.e_current->args =
+				txt.left(index-1).simplifyWhiteSpace();
 
-		// TODO Process ARGS
-		printf("%s: %s | %d\n",__FUNCTION__,
-		       (const char*)tcl.func_args_temp, line);
+			//TODO Arglist!
+		} else {
+			++tcl.func_args_bcnt;
+			tcl.func_args_temp += "{";
+			txt.remove(0,index+1);
+		}
+	}
+	printf("init: bcnt: %d\n",tcl.func_args_bcnt);
+
+	while(tcl.func_args_bcnt != 0) {
+		index = txt.find(nonwhite);
+		printf("while: txt: |%s|\n",(const char*)tcl.func_args_temp);
+		if(index == -1) {
+			printf("break\n");
+			break; //newline appeard, without beeing done
+		}
+		printf("while: bcnt: %d, %d, |%c|\n",tcl.func_args_bcnt,index,txt[index]);
+
+		switch(txt[index]) {
+		case '{':
+			++tcl.func_args_bcnt;
+			tcl.func_args_temp += " {";
+			txt.remove(0,index+1);
+			break;
+		case '}':
+			--tcl.func_args_bcnt;
+			tcl.func_args_temp += "} ";
+			txt.remove(0,index+1);
+			break;
+		default: //any letter
+			txt.remove(0,index); //remove leading whitespaces
+			index = txt.find(nalnum);
+			assert(index != -1);
+			if(tcl.func_args_bcnt < 3) {
+				if(tcl.a_current == NULL) {
+					//new Argument
+					tcl.a_current = new Argument();
+					tcl.e_current->argList->
+						append(tcl.a_current);
+					tcl.a_current->name = txt.left(index);
+					tcl.func_args_temp += txt.left(index);
+					txt.remove(0,index);
+				}
+
+				if(tcl.func_args_bcnt == 2) {
+					//lookup for defval
+					index = txt.find(nonwhite);
+					if(index != -1 &&
+					   txt.mid(index,1).find(alnum) != -1) {
+						//txt[index] is alnum->defval
+						txt.remove(0,index);
+						index = txt.find(nalnum);
+
+						tcl.a_current->defval =
+							txt.left(index);
+
+						tcl.func_args_temp += " " +
+							txt.left(index);
+
+						txt.remove(0,index);
+
+						tcl.a_current = NULL;
+					}
+				} else {
+					tcl.a_current = NULL;
+				}
+			} else {
+				index = txt.find(QRegExp("[A-Za-z0-9_ \\t]+"));
+				assert(index != -1);
+
+				tcl.a_current->defval += txt.left(index);
+				tcl.a_current = NULL;
+				tcl.func_args_temp += " " + txt.left(index);
+				txt.remove(0,index);
+			}
+		}
+	}
+
+	if(tcl.func_args_bcnt == 0) {
+		tcl.a_current = NULL;
+		tcl.e_current->args = tcl.func_args_temp.simplifyWhiteSpace();
 
 		index = txt.find(obrace);
 		assert(tcl.e_current != NULL);
 		if(index == -1) {
 			//no new block -> function is over after the line
-			tcl.e_current->args = "{" + tcl.func_args_temp + "}";
 			tcl.e_inside->addSubEntry(tcl.e_current);
 			tcl.e_current = NULL;
 		} else {
@@ -453,12 +534,9 @@ void tcl_func_args(QCString txt, int line, bool end)
 		}
 
 		tcl.func_args_temp = "";  //clear storage string
+		yyless(len - txt.length());
+		yy_pop_state();
 
-	} else {
-		txt = txt.simplifyWhiteSpace();
-		if(!tcl.func_args_temp.isEmpty())
-			tcl.func_args_temp += " ";
-		tcl.func_args_temp += txt;
 	}
 }
 
@@ -481,6 +559,7 @@ void tcl_init(void)
 
 	tcl.func_args_temp = "";
 	tcl.func_body_temp = "";
+	tcl.func_args_bcnt = 0;
 	tcl.e_main = NULL;
 	tcl.e_current = NULL;
 	tcl.e_inside = NULL;
