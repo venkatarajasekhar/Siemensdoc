@@ -126,6 +126,7 @@ void tcl_class_inherit(QCString txt, int line);
 void tcl_ns_init(QCString txt, int line);
 void tcl_entry_merge(Entry *res, Entry *e);
 void tcl_cmt_proc(bool args, int line);
+void tcl_brief_line(QCString txt, int line);
 
 //-----------------------------------------------------------------------
 #undef YY_INPUT
@@ -160,6 +161,7 @@ NONWHITE [^ \t\n]
 #%[A-Za-z]*Header(#)*\n		yy_push_state(CMTHEAD);
 #%ProcedureRange{WHITE}*\n	yy_push_state(CMTRANGE);
 #%ProcedureArgs{WHITE}*\n	yy_push_state(CMTARGS);
+#%.+\n				tcl_brief_line(yytext, yylineno);
 #[^%].*\n
 
 <CMTHEAD>^[^#]				{ tcl_cmt_finish(yylineno);
@@ -227,6 +229,18 @@ void tcl_merge_entry(Entry* e1, Entry* e2)
 	(void)e1;
 	(void)e2;
 }
+
+//! stores a short brief description
+void tcl_brief_line(QCString txt, int line)
+{
+	if(tcl.e_current == NULL)
+		tcl.e_current = tcl_entry_new();
+
+	txt.remove(0,2); // remove #% at beginning
+	tcl.e_current->brief += txt.simplifyWhiteSpace();
+	tcl.e_current->briefLine = line;
+}
+
 
 //! stores the header to the current Entry Object
 void tcl_cmt_store(QCString txt)
