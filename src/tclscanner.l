@@ -122,6 +122,7 @@ void tcl_func_body(QCString txt);
 void tcl_block_start(int line);
 void tcl_block_end(tcl_context* context, int line);
 void tcl_class_init(QCString txt, int line);
+void tcl_class_inherit(QCString txt, int line);
 void tcl_ns_init(QCString txt, int line);
 void tcl_entry_merge(Entry *res, Entry *e);
 void tcl_cmt_proc(bool args, int line);
@@ -138,10 +139,11 @@ NONWHITE [^ \t\n]
 %option yylineno
 %option noyywrap
 %option stack
-%option debug
+/*%option debug*/
 
-/* Start Conditions */
+/* Start Conditins */
 %x QUOTE
+%x QUOTEESC
 %x CMTHEAD
 %x FUNCARGS
 %x CMTARGS
@@ -150,8 +152,10 @@ NONWHITE [^ \t\n]
 %x FUNCBODY
 
 %%
-\"			yy_push_state(QUOTE);
-<QUOTE>[^\\]\"		yy_pop_state();
+"\""			yy_push_state(QUOTE);
+<QUOTE>"\\"		yy_push_state(QUOTEESC);
+<QUOTEESC>.		yy_pop_state();
+<QUOTE>"\""		yy_pop_state();
 
 #%[A-Za-z]*Header(#)*\n		yy_push_state(CMTHEAD);
 #%ProcedureRange{WHITE}*\n	yy_push_state(CMTRANGE);
@@ -163,18 +167,19 @@ NONWHITE [^ \t\n]
 <CMTHEAD>^#.+\n		tcl_cmt_store(yytext);
 
 	/* Start new Tcl Block */
-\{		tcl_block_start(yylineno);
+"{"		tcl_block_start(yylineno);
 
-\}		{ tcl_block_end(tcl.stack.pop(), yylineno); }
+"}"		{ tcl_block_end(tcl.stack.pop(), yylineno); }
 
-"namespace eval".*\n	tcl_ns_init(yytext,yylineno);
+namespace{WHITE}+eval.*\n	tcl_ns_init(yytext,yylineno);
 
-class.*\n	tcl_class_init(yytext, yylineno);
+class{WHITE}.*\{.*\n	tcl_class_init(yytext, yylineno);
+inherit{WHITE}.*\n	tcl_class_inherit(yytext, yylineno);
 
-{WHITE}*(constructor|destructor){WHITE}+	{ tcl_func_name(yytext);
-						yy_push_state(FUNCARGS); }
-{WHITE}*(public|private|protected){0,1}{WHITE}*(body|proc|method){WHITE}+{NONWHITE}+{WHITE}+	{ tcl_func_name(yytext);
-						yy_push_state(FUNCARGS); }
+{WHITE}*(constructor|destructor){WHITE}+	{ yy_push_state(FUNCARGS);
+					tcl_func_name(yytext); }
+{WHITE}*(public|private|protected){0,1}{WHITE}*(body|proc|method){WHITE}+{NONWHITE}+{WHITE}+	{ yy_push_state(FUNCARGS);
+					tcl_func_name(yytext); }
 
 {WHITE}*(public|private|protected){0,1}{WHITE}*variable{WHITE}+.+\n {
 	tcl_var_name(yytext, yylineno); }
@@ -230,9 +235,11 @@ void tcl_cmt_store(QCString txt)
 	QRegExp brief("^#[ \\t]*Abstract[ \\t]*:");
 	QRegExp args("^#[ \\t]*Arguments[ \\t]*:");
 	QRegExp result("^#[ \\t]*Results[ \\t]*:");
+	QRegExp req("^#[ \\t]*Req[ \\t]*:");
 	QRegExp empty("^#[ \\t]*:");
 	QRegExp nonwhite("[^ \\t]");
 	int index;
+	bool breq = false;
 
 	if(txt.find(author) != -1) {
 		tcl.cmt_store_temp += "\\author ";
@@ -242,6 +249,9 @@ void tcl_cmt_store(QCString txt)
 		tcl.cmt_store_temp += "\\par Arguments\n";
 	} else if(txt.find(result) != -1) {
 		tcl.cmt_store_temp += "\\par Result\n";
+	} else if(txt.find(req) != -1) {
+		tcl.cmt_store_temp += "\\xrefitem ";
+		breq = true;
 	} else if(txt.find(empty) != -1) {
 	} else {
 		return;
@@ -253,8 +263,22 @@ void tcl_cmt_store(QCString txt)
 	index = txt.find(nonwhite);
 	assert(index != -1); // either char is found or \n
 	txt.remove(0,index);
+	txt = txt.stripWhiteSpace();
 
-	tcl.cmt_store_temp += txt + "\n";
+	if(breq) {
+		index = txt.find(QRegExp("[ \\t]"));
+		if(index == -1) //no description for Requirement
+			tcl.cmt_store_temp += txt + " \"" + txt +
+				"\" \"" + txt + "\"\n";
+		else {
+			QCString tmp = txt.left(index);
+			txt.remove(0,index+1);
+			tcl.cmt_store_temp += tmp + " \"" + tmp +
+				"\" \"" + tmp + "\" " + txt + "\n";
+		}
+	} else {
+		tcl.cmt_store_temp += txt + "\n";
+	}
 }
 
 //! stores comment to an entry
@@ -265,7 +289,7 @@ void tcl_cmt_finish(int line)
 	QCString txt;
 	bool newentry;
 
-	printf("cmt_store: |%s|\n", (const char*)tcl.cmt_store_temp);
+	//	printf("cmt_store: |%s|\n", (const char*)tcl.cmt_store_temp);
 
 	in.addArray("/*!",3);
 	in.addArray(tcl.cmt_store_temp,tcl.cmt_store_temp.length());
@@ -278,18 +302,35 @@ void tcl_cmt_finish(int line)
 	out.addChar('\0');
 
 	txt = out.data();
+	tcl.cmt_store_temp = txt;
 
 	if(tcl.e_current == NULL)
 		tcl.e_current = tcl_entry_new();
 
-	parseCommentBlock(tcl.this_parser, tcl.e_current, txt, tcl.file_name,
+	while(parseCommentBlock(tcl.this_parser, tcl.e_current, txt, tcl.file_name,
 					  line, FALSE, tcl.config_autobrief,
-					  FALSE, tcl.protection, pos,newentry);
+				FALSE, tcl.protection, pos,newentry)) {
 
-	if(newentry)
-		printf("New Entry!\n");
+	if(newentry) {
+		//		printf("New Entry!\n");
+		newentry = false;
+		tcl.e_inside->addSubEntry(tcl.e_current);
+		tcl.e_current = tcl_entry_new();
+	} else {
+		tcl.e_current->section = tcl.e_inside->section;
+		tcl.e_current->name = tcl.e_inside->name;
+	}
+	}
 
-	tcl.cmt_store_temp = txt;
+	if(newentry) {
+		//		printf("New Entry!\n");
+		newentry = false;
+		tcl.e_inside->addSubEntry(tcl.e_current);
+		tcl.e_current = tcl_entry_new();
+	} else {
+		tcl.e_current->section = tcl.e_inside->section;
+		tcl.e_current->name = tcl.e_inside->name;
+	}
 }
 
 //! handles procedure range and args
@@ -299,12 +340,15 @@ void tcl_cmt_proc(bool args, int line)
 	Entry *e;
 	int pos=0;
 	bool newentry;
+	tcl_context *t = tcl.stack.top();
 
-	e = tcl.stack.top()->e_current;
-	printf("PROCRANGE: |%s|\n", (const char*)e->name);
+	if(t == NULL)
+		return;
+
+	e = t->e_current;
+
 	if(e == NULL)
-		tcl_error(__FUNCTION__,line,
-				  "Procedure Descrption outside a Procedure");
+		return;
 	if(args)
 		tcl.cmt_proc_temp = "\\par Args\n" + tcl.cmt_proc_temp;
 	else
@@ -324,8 +368,9 @@ void tcl_cmt_proc(bool args, int line)
 					  line, FALSE, tcl.config_autobrief,
 					  FALSE, tcl.protection, pos,newentry);
 
-	if(newentry)
-		printf("New Entry!\n");
+	//	if(newentry)
+		//		printf("New Entry!\n");
+
 }
 
 //! opens a new block, stores context onto the stack
@@ -436,7 +481,7 @@ void tcl_ns_init(QCString txt, int line)
 	tcl.e_current = NULL;
 	tcl.protection = Public;
 
-	printf("Namespace: |%s|\n",(const char*)name);
+	//	printf("Namespace: |%s|\n",(const char*)name);
 }
 
 //! inits new class entry
@@ -502,8 +547,49 @@ void tcl_class_init(QCString txt, int line)
 	tcl.e_current = NULL;
 	tcl.protection = Public;
 
-	printf("Klasse: |%s|\n",(const char*)name);
+	//	printf("Klasse: |%s|\n",(const char*)name);
 }
+
+//! handles inheritance relation between classes
+void tcl_class_inherit(QCString txt, int line)
+{
+	QRegExp white("[ \\t]");
+	QRegExp nonwhite("^[ \\t\\n]");
+	BaseInfo *inf;
+	Entry *e = tcl.stack.top()->e_current;
+	int index;
+
+	if(e == NULL)
+		tcl_error(__FUNCTION__,line,"Inherit not in an Entity");
+	if(e->section != Entry::CLASS_SEC)
+		tcl_error(__FUNCTION__,line,"Inherit not in a Class");
+
+	index = txt.find(';'); //possible comment
+	if(index != -1) {
+		yyless(index);
+		txt.remove(index,txt.length()-1);
+	} else {
+		index = txt.find('#'); //possible end of command
+		if(index != -1) {
+			yyless(index);
+			txt.remove(index,txt.length()-1);
+		}
+	}
+
+	txt = txt.simplifyWhiteSpace();
+	index = txt.find(white);
+	assert(index != -1); //inherit hast to have a following string
+	txt.remove(0,index+1);
+
+	do {
+		index = txt.find(white);
+		inf = new BaseInfo(txt.left(index), Public, Normal);
+		//		printf("|%s|\n",(const char*)txt.left(index));
+		txt.remove(0,index+1);
+		e->extends->append(inf);
+	}while(index != -1);
+}
+
 
 //! handles function analysing
 void tcl_var_name(QCString txt, int line)
@@ -575,8 +661,9 @@ void tcl_var_name(QCString txt, int line)
 	tcl.e_current->name = name;
 	tcl.e_current->protection = tcl.protection;
 	tcl.protection = Public;
+	tcl.cmt_store_temp = "";
 
-	printf("Var: |%s|, |%s|\n",(const char*)name, (const char*)tcl.e_inside->name);
+	//	printf("Var: |%s|, |%s|\n",(const char*)name, (const char*)tcl.e_inside->name);
 
 	if(txt.contains("##")) {
 		index = txt.find("##");
@@ -629,7 +716,7 @@ void tcl_func_name(QCString txt)
 	} //if txt == constructor/destructor, nothing to do
 	name = txt;
 
-	printf("Funktion: |%s|\n",(const char*)name);
+	//	printf("Funktion: |%s|\n",(const char*)name);
 
 	//namespace/class hierarchy processing
 	if(name.contains(':')) {
@@ -665,27 +752,50 @@ void tcl_func_name(QCString txt)
 	//processing of name
 	if(typ == "body") {
 		e = tcl.fn.find(txt);
-		if(e == NULL)
-			tcl_error(__FUNCTION__,__LINE__,
-					  "Body Function of a non-existant Function");
+		if(e == NULL) {
+			yy_pop_state();
+			return;
+		}
+			//			tcl_error(__FUNCTION__,__LINE__,
+		//					  "Body Function of a non-existant Function");
 		if(tcl.e_current != NULL) {
 			int pos = 0;
-			bool newentry;
+			bool newentry, init=true;
 			int line;
 
 			delete tcl.e_current;
 			tcl.e_current = e;
 			e->args = "";
 			e->argList->clear();
-			parseCommentBlock(tcl.this_parser, e, tcl.cmt_store_temp,
-							  tcl.file_name, line,
-							  FALSE,
-							  tcl.config_autobrief,
-							  FALSE, tcl.protection,
-							  pos,newentry);
+
+			while(parseCommentBlock(tcl.this_parser, tcl.e_current, tcl.cmt_store_temp, tcl.file_name,
+					  line, FALSE, tcl.config_autobrief,
+				FALSE, tcl.protection, pos,newentry)) {
+
+				if(newentry) {
+					//					printf("New Entry!\n");
+					newentry = false;
+					if(!init)
+					    tcl.e_inside->addSubEntry(tcl.e_current);
+					tcl.e_current = tcl_entry_new();
+				} else {
+					tcl.e_current->section = tcl.e_inside->section;
+					tcl.e_current->name = tcl.e_inside->name;
+				}
+			}
+
+			if(newentry) {
+				//				printf("New Entry!\n");
+				newentry = false;
+				tcl.e_inside->addSubEntry(tcl.e_current);
+				tcl.e_current = tcl_entry_new();
+			}
+
+
+
 			tcl.cmt_store_temp = "";
-			if(newentry)
-				printf("New Entry!\n");
+		} else {
+			tcl.e_current = e;
 		}
 		e = NULL;
 	} else if(typ == "method" || typ == "proc" ||
@@ -709,15 +819,15 @@ void tcl_func_name(QCString txt)
 		}
 		if(inside->section == Entry::CLASS_SEC ||
 		   inside->section == Entry::NAMESPACE_SEC) {
-			txt = inside->name + "::" + txt;
+			name = inside->name + "::" + name;
 			while(inside->parent()->section == Entry::CLASS_SEC ||
 				  inside->parent()->section == Entry::NAMESPACE_SEC) {
 				inside = inside->parent();
-				txt = inside->name + "::" + txt;
+				name = inside->name + "::" + name;
 			}
 		}
-		printf("|%s|\n",(const char*)txt);
-		tcl.fn.insert(txt, tcl.e_current);
+		//		printf("|%s|\n",(const char*)name);
+		tcl.fn.insert(name, tcl.e_current);
 	} else {
 		tcl_error(__FUNCTION__,__LINE__,"unrecongnised function typ");
 	}
@@ -728,12 +838,13 @@ void tcl_func_args(QCString txt, int line)
 {
 	QRegExp cbrace("\\}"), obrace("\\{");
 	QRegExp brace("[\\}\\{]");
-	QRegExp alnum("[A-Za-z0-9_]"), nalnum("[^A-Za-z0-9_]");
+	QRegExp alnum("[A-Za-z0-9_-+\"%]"), nalnum("[^A-Za-z0-9_-+\"%]");
 	QRegExp white("[ \\t]"), nonwhite("[^ \\t\\n]");
 	int index, len;
 
 	len = txt.length();
 
+	//	fprintf(stderr,"Text |%s|\nlen |%d|\n",(const char*)txt,len);
 	if(tcl.func_args_bcnt == 0) {
 		index = txt.find(obrace);
 		if(index == -1) { //proc a args command
@@ -747,7 +858,12 @@ void tcl_func_args(QCString txt, int line)
 			tcl.e_current->argList->append(tcl.a_current);
 			tcl.a_current = NULL;
 
-		} else if(index > txt.find(alnum)) {
+			tcl.e_current = NULL;
+			tcl.func_args_temp = "";  //clear storage string
+			yy_pop_state();
+			return;
+
+		} else if(index > txt.find(alnum) && txt.find(alnum) != -1) {
 			//proc a args { commands }
 			//Arguments is only 1 word
 			tcl.e_current->args =
@@ -757,6 +873,11 @@ void tcl_func_args(QCString txt, int line)
 			tcl.a_current->name = tcl.e_current->args;
 			tcl.e_current->argList->append(tcl.a_current);
 			tcl.a_current = NULL;
+
+			tcl.e_current = NULL;
+			tcl.func_args_temp = "";  //clear storage string
+			yy_pop_state();
+			return;
 		} else {
 			++tcl.func_args_bcnt;
 			tcl.func_args_temp += " { ";
@@ -841,6 +962,7 @@ void tcl_func_args(QCString txt, int line)
 		if(index == -1) {
 			//no new block -> function is over after the line
 		} else {
+			//			fprintf(stderr,"ERR: %d\n",len-txt.length()+index);
 			yyless(len - txt.length() + index + 1);
 
 			tcl.t_current = new tcl_context();
@@ -889,6 +1011,7 @@ void tcl_init(void)
 	tcl.e_inside = NULL;
 
 	tcl.stack.clear();
+
 	tcl.ns.clear();
 	tcl.cl.clear();
 	tcl.fn.clear();
@@ -903,16 +1026,17 @@ static void tcl_parse()
 {
 	tcl.e_inside = tcl.e_main;
 
-	tcl.e_current = tcl_entry_new();
+	/*	tcl.e_current = tcl_entry_new();
 	tcl.e_current->name = "var1";
 	tcl.e_current->section = Entry::VARIABLE_SEC;
 	tcl.e_current->type = "variable";
 	tcl.e_main->addSubEntry(tcl.e_current);
-	tcl.e_current = NULL;
+	tcl.e_current = NULL;*/
 
 	yyrestart(yyin);
 	yylineno = 1;
 	yylex();
+
 }
 
 //! Parse text file and build up entry tree.
@@ -925,7 +1049,7 @@ void TclLanguageScanner::parseInput(const char *fileName,
 	myFile.setName(fileName);
 	if (!myFile.open(IO_ReadOnly)) return;
 
-	printf("Parsing '%s'...\n",fileName);
+	//	printf("Parsing '%s'...\n",fileName);
 
 	//printf("Debug: %s\n", input);
 
