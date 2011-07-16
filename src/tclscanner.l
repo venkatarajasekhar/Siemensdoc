@@ -679,12 +679,12 @@ void tcl_var_name(QCString txt, int line)
 
 	//	printf("Var: |%s|, |%s|\n",(const char*)name, (const char*)tcl.e_inside->name);
 
-	if(txt.contains("##")) {
-		index = txt.find("##");
-		assert(index != -1); //should not happen, was just found
-		txt.remove(0,index+2);
-		tcl.e_current->brief = txt;
-	}
+	//	if(txt.contains("##")) {
+	//	index = txt.find("##");
+	//	assert(index != -1); //should not happen, was just found
+	//	txt.remove(0,index+2);
+	//	tcl.e_current->brief = txt;
+	//	}
 
 	tcl.e_inside->addSubEntry(tcl.e_current);
 	tcl.e_current = NULL;
