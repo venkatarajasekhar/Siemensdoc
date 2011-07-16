@@ -987,11 +987,11 @@ void tcl_func_args(QCString txt, int line)
 			tcl.stack.push(tcl.t_current);
 		}
 
-		if(txt.contains("##")) { //look for brief
-			index = txt.find("##");
-			txt.remove(0,index+2);
-			tcl.e_current->brief = txt.simplifyWhiteSpace();
-		}
+		//		if(txt.contains("##")) { //look for brief
+		//	index = txt.find("##");
+		//	txt.remove(0,index+2);
+		//	tcl.e_current->brief = txt.simplifyWhiteSpace();
+		//		}
 
 		tcl.e_current = NULL;
 		tcl.func_args_temp = "";  //clear storage string
