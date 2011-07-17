@@ -161,7 +161,7 @@ NONWHITE [^ \t\n]
 #%[A-Za-z]*Header(#)*\n		yy_push_state(CMTHEAD);
 #%ProcedureRange{WHITE}*\n	yy_push_state(CMTRANGE);
 #%ProcedureArgs{WHITE}*\n	yy_push_state(CMTARGS);
-#%.+\n				tcl_brief_line(yytext, yylineno);
+
 #[^%].*\n
 
 <CMTHEAD>^[^#]				{ tcl_cmt_finish(yylineno);
@@ -188,13 +188,19 @@ inherit{WHITE}.*\n	tcl_class_inherit(yytext, yylineno);
 
 <FUNCARGS>.*\n		{ tcl_func_args(yytext, yylineno); }
 
-<CMTRANGE>.|\n		tcl.cmt_proc_temp += yytext;
-<CMTRANGE>#%		{ tcl_cmt_proc(false, yylineno);
-					yy_pop_state(); yyless(0); }
+<CMTRANGE>\n		tcl.cmt_proc_temp += "<br />\n";
+<CMTRANGE>.		tcl.cmt_proc_temp += yytext;
+<CMTRANGE>#%End		{ tcl_cmt_proc(false, yylineno);
+	yy_pop_state(); yyless(0); }
+<CMTRANGE>#%ProcedureArgs { tcl_cmt_proc(false, yylineno);
+	yy_pop_state(); yyless(0); }
 
-<CMTARGS>.|\n			tcl.cmt_proc_temp += yytext;
-<CMTARGS>#%		{ tcl_cmt_proc(true, yylineno);
-					yy_pop_state(); yyless(0); }
+<CMTARGS>\n		tcl.cmt_proc_temp += "<br />\n";
+<CMTARGS>.		tcl.cmt_proc_temp += yytext;
+<CMTARGS>#%End		{ tcl_cmt_proc(true, yylineno);
+	yy_pop_state(); yyless(0); }
+<CMTARGS>#%ProcedureRange { tcl_cmt_proc(true, yylineno);
+	yy_pop_state(); yyless(0); }
 
 <*>.|\n			/* discard */;
 
@@ -237,7 +243,7 @@ void tcl_brief_line(QCString txt, int line)
 		tcl.e_current = tcl_entry_new();
 
 	txt.remove(0,2); // remove #% at beginning
-	tcl.e_current->brief += txt.simplifyWhiteSpace();
+	tcl.e_current->brief += " " + txt.simplifyWhiteSpace();
 	tcl.e_current->briefLine = line;
 }
 
@@ -356,6 +362,9 @@ void tcl_cmt_proc(bool args, int line)
 	bool newentry;
 	tcl_context *t = tcl.stack.top();
 
+	if(tcl.cmt_proc_temp.isEmpty())
+		return;
+
 	if(t == NULL)
 		return;
 
@@ -382,9 +391,7 @@ void tcl_cmt_proc(bool args, int line)
 					  line, FALSE, tcl.config_autobrief,
 					  FALSE, tcl.protection, pos,newentry);
 
-	//	if(newentry)
-		//		printf("New Entry!\n");
-
+	tcl.cmt_proc_temp = "";
 }
 
 //! opens a new block, stores context onto the stack
@@ -767,9 +774,17 @@ void tcl_func_name(QCString txt)
 	if(typ == "body") {
 		e = tcl.fn.find(txt);
 		if(e == NULL) {
+			tcl.cmt_store_temp = "";
+			if(tcl.e_current != NULL)
+				delete tcl.e_current;
+			tcl.e_current = NULL;
 			yy_pop_state();
 			return;
 		}
+
+		e->args = "";
+		e->argList->clear();
+
 			//			tcl_error(__FUNCTION__,__LINE__,
 		//					  "Body Function of a non-existant Function");
 		if(tcl.e_current != NULL) {
@@ -779,8 +794,6 @@ void tcl_func_name(QCString txt)
 
 			delete tcl.e_current;
 			tcl.e_current = e;
-			e->args = "";
-			e->argList->clear();
 
 			while(parseCommentBlock(tcl.this_parser, tcl.e_current, tcl.cmt_store_temp, tcl.file_name,
 					  line, FALSE, tcl.config_autobrief,
@@ -1063,7 +1076,7 @@ void TclLanguageScanner::parseInput(const char *fileName,
 	myFile.setName(fileName);
 	if (!myFile.open(IO_ReadOnly)) return;
 
-	//	printf("Parsing '%s'...\n",fileName);
+	printf("Parsing '%s'...\n",fileName);
 
 	//printf("Debug: %s\n", input);
 
