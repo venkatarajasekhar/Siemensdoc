@@ -380,9 +380,9 @@ void tcl_cmt_proc(bool args, int line)
 	if(e == NULL)
 		return;
 	if(args)
-		tcl.cmt_proc_temp = "\\par Args\n" + tcl.cmt_proc_temp;
+		tcl.cmt_proc_temp = "\\par ProcedureArgs\n" + tcl.cmt_proc_temp;
 	else
-		tcl.cmt_proc_temp = "\\par Range\n" + tcl.cmt_proc_temp;
+		tcl.cmt_proc_temp = "\\par ProcedureRange\n" + tcl.cmt_proc_temp;
 
 	in.addArray("/*!",3);
 	in.addArray(tcl.cmt_proc_temp, tcl.cmt_proc_temp.length());
@@ -1066,8 +1066,8 @@ void tcl_init(void)
 
 	tcl.stack.clear();
 
-	tcl.ns.clear();
-	tcl.cl.clear();
+	//tcl.ns.clear();
+	//tcl.cl.clear();
 	tcl.fn.clear();
 
 	tcl.protection = Public;
