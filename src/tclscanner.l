@@ -145,6 +145,7 @@ NONWHITE [^ \t\n]
 /* Start Conditins */
 %x QUOTE
 %x QUOTEESC
+%x ESC
 %x CMTHEAD
 %x FUNCARGS
 %x CMTARGS
@@ -153,37 +154,44 @@ NONWHITE [^ \t\n]
 %x FUNCBODY
 
 %%
-"\""			yy_push_state(QUOTE);
-<QUOTE>"\\"		yy_push_state(QUOTEESC);
-<QUOTEESC>.		yy_pop_state();
-<QUOTE>"\""		yy_pop_state();
+"\\"			yy_push_state(ESC);
+<ESC>.|\n		yy_pop_state();
+"\""			{fprintf(stderr,"Quote!\n"); yy_push_state(QUOTE); }
+<QUOTE>"\\"		{fprintf(stderr,"QuEsc!\n"); yy_push_state(QUOTEESC); }
+<QUOTEESC>.|\n		{fprintf(stderr,"EndQEsc!\n"); yy_pop_state(); }
+<QUOTE>"\""		{fprintf(stderr,"EndQo!\n"); yy_pop_state(); }
 
 #%[A-Za-z]*Header(#)*\n		yy_push_state(CMTHEAD);
 #%ProcedureRange{WHITE}*\n	yy_push_state(CMTRANGE);
 #%ProcedureArgs{WHITE}*\n	yy_push_state(CMTARGS);
 
-#[^%].*\n
+#.*[^\\\n]\n
+#(.|\\\n)*[^\\\n]\n
 
-<CMTHEAD>^[^#]				{ tcl_cmt_finish(yylineno);
-						yy_pop_state(); yyless(0);}
-<CMTHEAD>^#.+\n		tcl_cmt_store(yytext);
+<CMTHEAD>^{WHITE}*#.*\n		tcl_cmt_store(yytext);
+<CMTHEAD>^{WHITE}*[^#]		{ tcl_cmt_finish(yylineno);
+	yy_pop_state(); yyless(0);}
+<CMTHEAD>.|\n	/* discard */
+
+info{WHITE}+[^\"\{\}\n]*\n	/* exclude info command */
 
 	/* Start new Tcl Block */
 "{"		tcl_block_start(yylineno);
 
 "}"		{ tcl_block_end(tcl.stack.pop(), yylineno); }
 
-namespace{WHITE}+eval.*\n	tcl_ns_init(yytext,yylineno);
+namespace{WHITE}+eval{WHITE}+{NONWHITE}+{WHITE}+\{.+\n	tcl_ns_init(yytext,yylineno);
 
-class{WHITE}.*\{.*\n	tcl_class_init(yytext, yylineno);
+class{WHITE}+[^ \t\n\{\}$]+{WHITE}+\{.*\n	tcl_class_init(yytext, yylineno);
 inherit{WHITE}.*\n	tcl_class_inherit(yytext, yylineno);
 
-{WHITE}*(constructor|destructor){WHITE}+	{ yy_push_state(FUNCARGS);
-					tcl_func_name(yytext); }
-{WHITE}*(public|private|protected){0,1}{WHITE}*(body|proc|method){WHITE}+{NONWHITE}+{WHITE}+	{ yy_push_state(FUNCARGS);
+{WHITE}*(constructor|destructor){WHITE}+/\{	{ yy_push_state(FUNCARGS);
+					tcl_func_name(yytext);
+					yyless(strlen(yytext)-1);}
+{WHITE}*(public|private|protected){0,1}{WHITE}*(body|proc|method){WHITE}+[^ \t\n\{\}]+{WHITE}+/\{	{ yy_push_state(FUNCARGS);
 					tcl_func_name(yytext); }
 
-{WHITE}*(public|private|protected){0,1}{WHITE}*variable{WHITE}+.+\n {
+{WHITE}*(public|private|protected){0,1}{WHITE}*variable{WHITE}+[A-Za-z0-9_<>]+[ \t\n] 	{
 	tcl_var_name(yytext, yylineno); }
 
 <FUNCARGS>.*\n		{ tcl_func_args(yytext, yylineno); }
@@ -222,8 +230,11 @@ Entry* tcl_entry_new()
 	newEntry->name = "";
 	newEntry->fileName = tcl.file_name;
 	newEntry->protection = Public;
+	newEntry->lang = SrcLangExt_Tcl;
 	initGroupInfo(newEntry);
 	tcl.entry.insert(0, newEntry);
+
+	fprintf(stderr,"New Entry, |%s|\n",(const char*)tcl.e_inside->name);
 
 	return newEntry;
 }
@@ -310,6 +321,8 @@ void tcl_cmt_finish(int line)
 	bool newentry;
 
 	//	printf("cmt_store: |%s|\n", (const char*)tcl.cmt_store_temp);
+	if(tcl.cmt_store_temp.isEmpty())
+		return;
 
 	in.addArray("/*!",3);
 	in.addArray(tcl.cmt_store_temp,tcl.cmt_store_temp.length());
@@ -332,24 +345,18 @@ void tcl_cmt_finish(int line)
 				FALSE, tcl.protection, pos,newentry)) {
 
 	if(newentry) {
-		//		printf("New Entry!\n");
+		fprintf(stderr,"New Entry! |%d|\n",line);
 		newentry = false;
 		tcl.e_inside->addSubEntry(tcl.e_current);
 		tcl.e_current = tcl_entry_new();
-	} else {
-		tcl.e_current->section = tcl.e_inside->section;
-		tcl.e_current->name = tcl.e_inside->name;
 	}
 	}
 
 	if(newentry) {
-		//		printf("New Entry!\n");
+		fprintf(stderr,"New Entry! |%d|\n",line);
 		newentry = false;
 		tcl.e_inside->addSubEntry(tcl.e_current);
 		tcl.e_current = tcl_entry_new();
-	} else {
-		tcl.e_current->section = tcl.e_inside->section;
-		tcl.e_current->name = tcl.e_inside->name;
 	}
 }
 
@@ -411,6 +418,8 @@ void tcl_block_start(int line)
 //! finishes an entry after the end of the block
 void tcl_block_end(tcl_context* context, int line)
 {
+	if(context == NULL)
+		tcl_error(__FUNCTION__,line,"Syntax error. A closing Brace too much!");
 	if(context->e_current != NULL) {
 		context->e_current->bodyLine = context->line0;
 		context->e_current->endBodyLine = line;
@@ -622,12 +631,6 @@ void tcl_var_name(QCString txt, int line)
 
 	length = txt.length();
 
-	if(tcl.stack.top()->e_current == NULL)
-		return;
-	if(tcl.stack.top()->e_current->section != Entry::CLASS_SEC &&
-	   tcl.stack.top()->e_current->section != Entry::NAMESPACE_SEC)
-		return;
-
 	index = txt.find(letter);
 	if(index == -1)
 		tcl_error(__FUNCTION__,line, "couldn't find a letter");
@@ -672,8 +675,21 @@ void tcl_var_name(QCString txt, int line)
 		tcl_error(__FUNCTION__,line,
 				  "couldn't find whitespace after name");
 	name = txt.left(index);
+	txt.remove(0,index);
+
+	fprintf(stderr,"var: |%s| |%d| |%d|\n",(const char*)name,length,txt.length());
 
 	yyless(length-txt.length());
+
+	if(tcl.stack.isEmpty())
+		return;
+
+	if(tcl.stack.top()->e_current == NULL)
+		return;
+
+	if(tcl.stack.top()->e_current->section != Entry::CLASS_SEC &&
+	   tcl.stack.top()->e_current->section != Entry::NAMESPACE_SEC)
+		return;
 
 	if(tcl.e_current == NULL) //no information at the moment
 		tcl.e_current = tcl_entry_new();
@@ -740,7 +756,7 @@ void tcl_func_name(QCString txt)
 	//	printf("Funktion: |%s|\n",(const char*)name);
 
 	//namespace/class hierarchy processing
-	if(name.contains(':')) {
+	if(name.contains(':') && typ == "proc") {
 		index = name.find(':'); //first time it exists
 		do {
 			parent = name.left(index);
@@ -771,7 +787,7 @@ void tcl_func_name(QCString txt)
 	//now only name is left
 
 	//processing of name
-	if(typ == "body") {
+	if(typ == "body" || typ == "itcl::body") {
 		e = tcl.fn.find(txt);
 		if(e == NULL) {
 			tcl.cmt_store_temp = "";
@@ -782,8 +798,14 @@ void tcl_func_name(QCString txt)
 			return;
 		}
 
-		e->args = "";
-		e->argList->clear();
+		if(!(e->argList->isEmpty())) {
+			fprintf(stderr,"Del: |%s| |%s|\n",(const char*)e->name,(const char*)e->args);
+			
+			e->args.resize(0);
+			e->argList->clear();
+			//			delete e->argList;
+			//e->argList = new ArgumentList();
+		}
 
 			//			tcl_error(__FUNCTION__,__LINE__,
 		//					  "Body Function of a non-existant Function");
@@ -828,22 +850,16 @@ void tcl_func_name(QCString txt)
 	} else if(typ == "method" || typ == "proc" ||
 			  name == "constructor" || name == "destructor") {
 		//check if some data were already collected
-		if(tcl.e_current != NULL) {
-			tcl.e_current->name = name;
-			tcl.e_current->type = typ;
-			tcl.e_current->protection = tcl.protection;
-			tcl.protection = Public;
-			tcl.e_current->section = Entry::FUNCTION_SEC;
-			inside->addSubEntry(tcl.e_current);
-		} else {
+		if(tcl.e_current == NULL) {
 			tcl.e_current = tcl_entry_new();
-			tcl.e_current->name = name;
-			tcl.e_current->type = typ;
-			tcl.e_current->protection = tcl.protection;
-			tcl.protection = Public;
-			tcl.e_current->section = Entry::FUNCTION_SEC;
-			inside->addSubEntry(tcl.e_current);
 		}
+		tcl.e_current->name = name;
+		tcl.e_current->type = typ;
+		tcl.e_current->protection = tcl.protection;
+		tcl.protection = Public;
+		tcl.e_current->section = Entry::FUNCTION_SEC;
+		inside->addSubEntry(tcl.e_current);
+
 		if(inside->section == Entry::CLASS_SEC ||
 		   inside->section == Entry::NAMESPACE_SEC) {
 			name = inside->name + "::" + name;
@@ -865,22 +881,25 @@ void tcl_func_args(QCString txt, int line)
 {
 	QRegExp cbrace("\\}"), obrace("\\{");
 	QRegExp brace("[\\}\\{]");
-	QRegExp alnum("[A-Za-z0-9_-+\"%]"), nalnum("[^A-Za-z0-9_-+\"%]");
+	QRegExp alnum("[^\\}\\{ \\t\\n]"), nalnum("[\\}\\{ \\t\\n]");
 	QRegExp white("[ \\t]"), nonwhite("[^ \\t\\n]");
 	int index, len;
 
 	len = txt.length();
 
-	//	fprintf(stderr,"Text |%s|\nlen |%d|\n",(const char*)txt,len);
 	if(tcl.func_args_bcnt == 0) {
 		index = txt.find(obrace);
 		if(index == -1) { //proc a args command
 			index = txt.find(white);
-			if(index == -1)
-				tcl_error(__FUNCTION__,__LINE__,
-					  "should contain whitespace");
+			if(index == -1) {
+				delete tcl.e_current;
+				return;
+				//				tcl_error(__FUNCTION__,__LINE__,
+				//	  "should contain whitespace");
+			}
 			tcl.e_current->args = txt.left(index);
 			tcl.a_current = new Argument();
+			fprintf(stderr,"Argu: |%s| |%s|\n",(const char*)tcl.e_current->name,(const char*)tcl.e_current->args);
 			tcl.a_current->name = tcl.e_current->args;
 			tcl.e_current->argList->append(tcl.a_current);
 			tcl.a_current = NULL;
@@ -897,6 +916,7 @@ void tcl_func_args(QCString txt, int line)
 				txt.left(index).simplifyWhiteSpace();
 
 			tcl.a_current = new Argument();
+			fprintf(stderr,"Argu: |%s| |%s|\n",(const char*)tcl.e_current->name,(const char*)tcl.e_current->args);
 			tcl.a_current->name = tcl.e_current->args;
 			tcl.e_current->argList->append(tcl.a_current);
 			tcl.a_current = NULL;
@@ -923,11 +943,17 @@ void tcl_func_args(QCString txt, int line)
 		case '{':
 			++tcl.func_args_bcnt;
 			tcl.func_args_temp += " { ";
+			if(tcl.a_current != NULL && tcl.func_args_bcnt > 2)
+				tcl.a_current->defval += " { ";
 			txt.remove(0,index+1);
 			break;
 		case '}':
 			--tcl.func_args_bcnt;
 			tcl.func_args_temp += " } ";
+			if(tcl.a_current != NULL && tcl.func_args_bcnt > 2)
+				tcl.a_current->defval += " } ";
+			if(tcl.a_current != NULL && tcl.func_args_bcnt == 1)
+				tcl.a_current = NULL;
 			txt.remove(0,index+1);
 			break;
 		default: //any letter
@@ -941,6 +967,7 @@ void tcl_func_args(QCString txt, int line)
 					tcl.e_current->argList->
 						append(tcl.a_current);
 					tcl.a_current->name = txt.left(index);
+								fprintf(stderr,"Argu: |%s| |%s|\n",(const char*)tcl.e_current->name,(const char*)tcl.a_current->name);
 					tcl.func_args_temp += " " +
 						txt.left(index);
 					txt.remove(0,index);
@@ -969,11 +996,10 @@ void tcl_func_args(QCString txt, int line)
 					tcl.a_current = NULL;
 				}
 			} else {
-				index = txt.find(QRegExp("[A-Za-z0-9_ \\t]+"));
+				index = txt.find(QRegExp("[\\{\\}\\n]"));
 				assert(index != -1);
 
 				tcl.a_current->defval += txt.left(index);
-				tcl.a_current = NULL;
 				tcl.func_args_temp += " " + txt.left(index);
 				txt.remove(0,index);
 			}
@@ -989,7 +1015,7 @@ void tcl_func_args(QCString txt, int line)
 		if(index == -1) {
 			//no new block -> function is over after the line
 		} else {
-			//			fprintf(stderr,"ERR: %d\n",len-txt.length()+index);
+			fprintf(stderr,"ERR: %d\n",len-txt.length()+index);
 			yyless(len - txt.length() + index + 1);
 
 			tcl.t_current = new tcl_context();
@@ -998,6 +1024,7 @@ void tcl_func_args(QCString txt, int line)
 
 			tcl.e_inside = tcl.e_current;
 			tcl.stack.push(tcl.t_current);
+			tcl.t_current = NULL;
 		}
 
 		//		if(txt.contains("##")) { //look for brief
@@ -1047,12 +1074,14 @@ void tcl_init(void)
 
 	yylineno = 1;
 	tclscanYYrestart(tclscanYYin);
+	BEGIN(INITIAL);
 }
 
 static void tcl_parse()
 {
 	tcl.e_inside = tcl.e_main;
 
+	fprintf(stderr,"File: |%s|\n",(const char*)tcl.file_name);
 	/*	tcl.e_current = tcl_entry_new();
 	tcl.e_current->name = "var1";
 	tcl.e_current->section = Entry::VARIABLE_SEC;
