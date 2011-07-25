@@ -126,7 +126,7 @@ void tcl_class_inherit(QCString txt, int line);
 void tcl_ns_init(QCString txt, int line);
 void tcl_entry_merge(Entry *res, Entry *e);
 void tcl_cmt_proc(bool args, int line);
-void tcl_brief_line(QCString txt, int line);
+void tcl_cmt_short(QCString txt);
 
 //-----------------------------------------------------------------------
 #undef YY_INPUT
@@ -156,19 +156,21 @@ NONWHITE [^ \t\n]
 %%
 "\\"			yy_push_state(ESC);
 <ESC>.|\n		yy_pop_state();
-"\""			{fprintf(stderr,"Quote!\n"); yy_push_state(QUOTE); }
-<QUOTE>"\\"		{fprintf(stderr,"QuEsc!\n"); yy_push_state(QUOTEESC); }
-<QUOTEESC>.|\n		{fprintf(stderr,"EndQEsc!\n"); yy_pop_state(); }
-<QUOTE>"\""		{fprintf(stderr,"EndQo!\n"); yy_pop_state(); }
+"\""			yy_push_state(QUOTE);
+<QUOTE>"\\"		yy_push_state(QUOTEESC);
+<QUOTEESC>.|\n		yy_pop_state();
+<QUOTE>"\""		yy_pop_state(); 
 
 #%[A-Za-z]*Header(#)*\n		yy_push_state(CMTHEAD);
 #%ProcedureRange{WHITE}*\n	yy_push_state(CMTRANGE);
 #%ProcedureArgs{WHITE}*\n	yy_push_state(CMTARGS);
+#%.*\n			{ tcl_cmt_short(yytext); yy_push_state(CMTHEAD); }
 
 #.*[^\\\n]\n
 #(.|\\\n)*[^\\\n]\n
 
 <CMTHEAD>^{WHITE}*#.*\n		tcl_cmt_store(yytext);
+<CMTHEAD>^{WHITE}*#%.*\n	tcl_cmt_short(yytext);
 <CMTHEAD>^{WHITE}*[^#]		{ tcl_cmt_finish(yylineno);
 	yy_pop_state(); yyless(0);}
 <CMTHEAD>.|\n	/* discard */
@@ -234,7 +236,7 @@ Entry* tcl_entry_new()
 	initGroupInfo(newEntry);
 	tcl.entry.insert(0, newEntry);
 
-	fprintf(stderr,"New Entry, |%s|\n",(const char*)tcl.e_inside->name);
+	//fprintf(stderr,"New Entry, |%s|\n",(const char*)tcl.e_inside->name);
 
 	return newEntry;
 }
@@ -248,14 +250,63 @@ void tcl_merge_entry(Entry* e1, Entry* e2)
 }
 
 //! stores a short brief description
-void tcl_brief_line(QCString txt, int line)
+void tcl_cmt_short(QCString txt)
 {
-	if(tcl.e_current == NULL)
-		tcl.e_current = tcl_entry_new();
+	QRegExp author("^#%[ \\t]*Author[ \\t]*:");
+	QRegExp brief("^#%[ \\t]*Abstract[ \\t]*:");
+	QRegExp args("^#%[ \\t]*Arguments[ \\t]*:");
+	QRegExp result("^#%[ \\t]*Results[ \\t]*:");
+	QRegExp req("^#%[ \\t]*Req[ \\t]*:");
+	QRegExp empty("^#%[ \\t]*:");
+	QRegExp nonwhite("[^ \\t]");
+	int index;
+	bool breq = false;
+	bool desc = false;
+	QCString tmp;
 
-	txt.remove(0,2); // remove #% at beginning
-	tcl.e_current->brief += " " + txt.simplifyWhiteSpace();
-	tcl.e_current->briefLine = line;
+	if(txt.find(author) != -1) {
+		tcl.cmt_store_temp += "\\author ";
+	} else if(txt.find(brief) != -1) {
+		tcl.cmt_store_temp += "\\brief ";
+	} else if(txt.find(args) != -1) {
+		tcl.cmt_store_temp += "\\par Arguments\n";
+	} else if(txt.find(result) != -1) {
+		tcl.cmt_store_temp += "\\par Result\n";
+	} else if(txt.find(req) != -1) {
+		breq = true;
+	} else if(txt.find(empty) != -1) {
+	} else { //just description
+	    desc = true;
+	}
+
+	if(!desc) {
+	    index = txt.find(':');
+	    assert(index != -1); // : was already found
+	    txt.remove(0,index+1); //remove everything including :
+	}
+	index = txt.find(nonwhite);
+	assert(index != -1); // either char is found or \n
+	txt.remove(0,index);
+	txt = txt.stripWhiteSpace();
+
+	if(breq) {
+		index = txt.find(QRegExp("[ \\t]"));
+		if(index == -1) //no second req found
+			tcl.cmt_store_temp += "\\xrefitem " + txt + " \"" + txt +
+				"\" \"" + txt + "\"\n";
+		else {
+			do {
+				tmp = txt.left(index);
+				txt.remove(0,index+1);
+				tcl.cmt_store_temp += tmp + " \"" + tmp +
+					"\" \"" + tmp + "\"\n";
+				index = txt.find(QRegExp("[ \\t\\n]"));
+			}while(index != -1);
+		}
+	} else {
+		tcl.cmt_store_temp += txt + "\n";
+	}
+
 }
 
 
@@ -345,7 +396,7 @@ void tcl_cmt_finish(int line)
 				FALSE, tcl.protection, pos,newentry)) {
 
 	if(newentry) {
-		fprintf(stderr,"New Entry! |%d|\n",line);
+		//fprintf(stderr,"New Entry! |%d|\n",line);
 		newentry = false;
 		tcl.e_inside->addSubEntry(tcl.e_current);
 		tcl.e_current = tcl_entry_new();
@@ -353,7 +404,7 @@ void tcl_cmt_finish(int line)
 	}
 
 	if(newentry) {
-		fprintf(stderr,"New Entry! |%d|\n",line);
+		//fprintf(stderr,"New Entry! |%d|\n",line);
 		newentry = false;
 		tcl.e_inside->addSubEntry(tcl.e_current);
 		tcl.e_current = tcl_entry_new();
@@ -677,7 +728,7 @@ void tcl_var_name(QCString txt, int line)
 	name = txt.left(index);
 	txt.remove(0,index);
 
-	fprintf(stderr,"var: |%s| |%d| |%d|\n",(const char*)name,length,txt.length());
+	//fprintf(stderr,"var: |%s| |%d| |%d|\n",(const char*)name,length,txt.length());
 
 	yyless(length-txt.length());
 
@@ -799,7 +850,7 @@ void tcl_func_name(QCString txt)
 		}
 
 		if(!(e->argList->isEmpty())) {
-			fprintf(stderr,"Del: |%s| |%s|\n",(const char*)e->name,(const char*)e->args);
+			//fprintf(stderr,"Del: |%s| |%s|\n",(const char*)e->name,(const char*)e->args);
 			
 			e->args.resize(0);
 			e->argList->clear();
@@ -899,7 +950,7 @@ void tcl_func_args(QCString txt, int line)
 			}
 			tcl.e_current->args = txt.left(index);
 			tcl.a_current = new Argument();
-			fprintf(stderr,"Argu: |%s| |%s|\n",(const char*)tcl.e_current->name,(const char*)tcl.e_current->args);
+			//fprintf(stderr,"Argu: |%s| |%s|\n",(const char*)tcl.e_current->name,(const char*)tcl.e_current->args);
 			tcl.a_current->name = tcl.e_current->args;
 			tcl.e_current->argList->append(tcl.a_current);
 			tcl.a_current = NULL;
@@ -916,7 +967,7 @@ void tcl_func_args(QCString txt, int line)
 				txt.left(index).simplifyWhiteSpace();
 
 			tcl.a_current = new Argument();
-			fprintf(stderr,"Argu: |%s| |%s|\n",(const char*)tcl.e_current->name,(const char*)tcl.e_current->args);
+			//fprintf(stderr,"Argu: |%s| |%s|\n",(const char*)tcl.e_current->name,(const char*)tcl.e_current->args);
 			tcl.a_current->name = tcl.e_current->args;
 			tcl.e_current->argList->append(tcl.a_current);
 			tcl.a_current = NULL;
@@ -950,7 +1001,7 @@ void tcl_func_args(QCString txt, int line)
 		case '}':
 			--tcl.func_args_bcnt;
 			tcl.func_args_temp += " } ";
-			if(tcl.a_current != NULL && tcl.func_args_bcnt > 2)
+			if(tcl.a_current != NULL && tcl.func_args_bcnt > 1)
 				tcl.a_current->defval += " } ";
 			if(tcl.a_current != NULL && tcl.func_args_bcnt == 1)
 				tcl.a_current = NULL;
@@ -967,7 +1018,7 @@ void tcl_func_args(QCString txt, int line)
 					tcl.e_current->argList->
 						append(tcl.a_current);
 					tcl.a_current->name = txt.left(index);
-								fprintf(stderr,"Argu: |%s| |%s|\n",(const char*)tcl.e_current->name,(const char*)tcl.a_current->name);
+					//fprintf(stderr,"Argu: |%s| |%s|\n",(const char*)tcl.e_current->name,(const char*)tcl.a_current->name);
 					tcl.func_args_temp += " " +
 						txt.left(index);
 					txt.remove(0,index);
@@ -1015,7 +1066,7 @@ void tcl_func_args(QCString txt, int line)
 		if(index == -1) {
 			//no new block -> function is over after the line
 		} else {
-			fprintf(stderr,"ERR: %d\n",len-txt.length()+index);
+			//fprintf(stderr,"ERR: %d\n",len-txt.length()+index);
 			yyless(len - txt.length() + index + 1);
 
 			tcl.t_current = new tcl_context();
@@ -1081,7 +1132,7 @@ static void tcl_parse()
 {
 	tcl.e_inside = tcl.e_main;
 
-	fprintf(stderr,"File: |%s|\n",(const char*)tcl.file_name);
+	//fprintf(stderr,"File: |%s|\n",(const char*)tcl.file_name);
 	/*	tcl.e_current = tcl_entry_new();
 	tcl.e_current->name = "var1";
 	tcl.e_current->section = Entry::VARIABLE_SEC;
@@ -1212,4 +1263,5 @@ extern "C" { // some bogus code to keep the compiler happy
   void fscannerYYdummy() { yy_flex_realloc(0,0); }
 }
 #endif
+
 
