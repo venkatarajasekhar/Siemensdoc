@@ -469,8 +469,11 @@ void tcl_block_start(int line)
 //! finishes an entry after the end of the block
 void tcl_block_end(tcl_context* context, int line)
 {
-	if(context == NULL)
-		tcl_error(__FUNCTION__,line,"Syntax error. A closing Brace too much!");
+	if(context == NULL) {
+		fprintf(stderr,"%s: Warning, brace that was never opened found at line %d.\n",(const char*)tcl.file_name,line);
+		return;
+		//tcl_error(__FUNCTION__,line,"Syntax error. A closing Brace too much!");
+	}
 	if(context->e_current != NULL) {
 		context->e_current->bodyLine = context->line0;
 		context->e_current->endBodyLine = line;
