@@ -1,21 +1,22 @@
 #
-# This file was generated from Makefile.in on Die Apr 26 12:58:08 CEST 2011
+# This file was generated from Makefile.in on Wed Jul 27 16:04:07 UTC 2011
 #
 
-DOXYGEN   = /home/ben/Projects/doctool/doxygen_patched
-TMAKEPATH = /home/ben/Projects/doctool/doxygen_patched/tmake/lib/linux-g++
+DOXYGEN   = /home/perschak.t/cm/doxy-tool
+TMAKEPATH = /home/perschak.t/cm/doxy-tool/tmake/lib/linux-g++
 ENV       = env TMAKEPATH=$(TMAKEPATH)
-TMAKE     = /home/ben/Projects/doctool/doxygen_patched/tmake/bin/tmake
+TMAKE     = /home/perschak.t/cm/doxy-tool/tmake/bin/tmake
 MAKE      = /usr/bin/make
 PERL      = /usr/bin/perl
 RM        = rm -f
 CP        = cp
 VERSION   = 1.7.4
-INSTALL   = /home/ben/Projects/doctool/exec
+INSTALL   = /usr/local
 INSTTOOL  = /usr/bin/install
 DOXYDOCS  = ..
 DOCDIR    = $(INSTALL)/share/doc/packages/doxygen
-QTDIR     = /home/ben/Projects/doctool/mydoxydev/qt
+QTDIR     = 
+HAVE_DOT  = /usr/bin/dot
 all: Makefile.libmd5 
 	$(MAKE) -f Makefile.libmd5
 

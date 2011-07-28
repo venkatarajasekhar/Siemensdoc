@@ -1,9 +1,9 @@
 #
-# This file was generated from libmd5.pro.in on Die Apr 26 12:58:08 CEST 2011
+# This file was generated from libmd5.pro.in on Wed Jul 27 16:04:07 UTC 2011
 #
 
 TEMPLATE	= lib
-CONFIG		= warn_on staticlib debug
+CONFIG		= warn_on staticlib release
 HEADERS		= md5.h md5_loc.h
 SOURCES		= md5.c
 win32:INCLUDEPATH          += .

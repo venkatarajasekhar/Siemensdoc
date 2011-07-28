@@ -1,14 +1,15 @@
-DOXYGEN   = /home/ben/Projects/doctool/doxygen_patched
-TMAKEPATH = /home/ben/Projects/doctool/doxygen_patched/tmake/lib/linux-g++
+DOXYGEN   = /home/perschak.t/cm/doxy-tool
+TMAKEPATH = /home/perschak.t/cm/doxy-tool/tmake/lib/linux-g++
 ENV       = env TMAKEPATH=$(TMAKEPATH)
-TMAKE     = /home/ben/Projects/doctool/doxygen_patched/tmake/bin/tmake
+TMAKE     = /home/perschak.t/cm/doxy-tool/tmake/bin/tmake
 MAKE      = /usr/bin/make
 PERL      = /usr/bin/perl
 RM        = rm -f
 CP        = cp
 VERSION   = 1.7.4
-INSTALL   = /home/ben/Projects/doctool/exec
+INSTALL   = /usr/local
 INSTTOOL  = /usr/bin/install
 DOXYDOCS  = ..
 DOCDIR    = $(INSTALL)/share/doc/packages/doxygen
-QTDIR     = /home/ben/Projects/doctool/mydoxydev/qt
+QTDIR     = 
+HAVE_DOT  = /usr/bin/dot
