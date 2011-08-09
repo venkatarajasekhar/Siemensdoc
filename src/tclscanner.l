@@ -142,7 +142,7 @@ NONWHITE [^ \t\n]
 %option stack
 /*%option debug*/
 
-/* Start Conditins */
+/* Start Conditions */
 %x QUOTE
 %x QUOTEESC
 %x ESC
@@ -301,7 +301,7 @@ void tcl_cmt_short(QCString txt)
 				tcl.cmt_store_temp += tmp + " \"" + tmp +
 					"\" \"" + tmp + "\"\n";
 				index = txt.find(QRegExp("[ \\t\\n]"));
-			}while(index != -1);
+			} while(index != -1);
 		}
 	} else {
 		tcl.cmt_store_temp += txt + "\n";
