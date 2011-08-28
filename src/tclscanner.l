@@ -140,7 +140,7 @@ NONWHITE [^ \t\n]
 %option yylineno
 %option noyywrap
 %option stack
-/*%option debug*/
+%option debug
 
 /* Start Conditions */
 %x QUOTE
@@ -161,17 +161,17 @@ NONWHITE [^ \t\n]
 <QUOTEESC>.|\n		yy_pop_state();
 <QUOTE>"\""		yy_pop_state(); 
 
-#%[A-Za-z]*Header(#)*\n		yy_push_state(CMTHEAD);
+	/*#%[A-Za-z]*Header(#)*\n		yy_push_state(CMTHEAD);*/
 #%ProcedureRange{WHITE}*\n	yy_push_state(CMTRANGE);
 #%ProcedureArgs{WHITE}*\n	yy_push_state(CMTARGS);
-#%.*\n			{ tcl_cmt_short(yytext); yy_push_state(CMTHEAD); }
+#%.+\n			{ tcl_cmt_short(yytext); yy_push_state(CMTHEAD); }
 
 #.*[^\\\n]\n
 #(.|\\\n)*[^\\\n]\n
 
-<CMTHEAD>^{WHITE}*#.*\n		tcl_cmt_store(yytext);
+	/*<CMTHEAD>^{WHITE}*#.*\n		tcl_cmt_store(yytext);*/
 <CMTHEAD>^{WHITE}*#%.*\n	tcl_cmt_short(yytext);
-<CMTHEAD>^{WHITE}*[^#]		{ tcl_cmt_finish(yylineno);
+<CMTHEAD>^{WHITE}*[^#%]		{ tcl_cmt_finish(yylineno);
 	yy_pop_state(); yyless(0);}
 <CMTHEAD>.|\n	/* discard */
 
@@ -182,7 +182,7 @@ info{WHITE}+[^\"\{\}\n]*\n	/* exclude info command */
 
 "}"		{ tcl_block_end(tcl.stack.pop(), yylineno); }
 
-namespace{WHITE}+eval{WHITE}+{NONWHITE}+{WHITE}+\{.+\n	tcl_ns_init(yytext,yylineno);
+namespace{WHITE}+eval{WHITE}+{NONWHITE}+{WHITE}+\{.*\n	tcl_ns_init(yytext,yylineno);
 
 class{WHITE}+[^ \t\n\{\}$]+{WHITE}+\{.*\n	tcl_class_init(yytext, yylineno);
 inherit{WHITE}.*\n	tcl_class_inherit(yytext, yylineno);
@@ -200,15 +200,15 @@ inherit{WHITE}.*\n	tcl_class_inherit(yytext, yylineno);
 
 <CMTRANGE>\n		tcl.cmt_proc_temp += "<br />\n";
 <CMTRANGE>.		tcl.cmt_proc_temp += yytext;
-<CMTRANGE>#%End		{ tcl_cmt_proc(false, yylineno);
-	yy_pop_state(); yyless(0); }
+<CMTRANGE>#%End.*\n	{ tcl_cmt_proc(false, yylineno);
+	yy_pop_state(); }
 <CMTRANGE>#%ProcedureArgs { tcl_cmt_proc(false, yylineno);
 	yy_pop_state(); yyless(0); }
 
 <CMTARGS>\n		tcl.cmt_proc_temp += "<br />\n";
 <CMTARGS>.		tcl.cmt_proc_temp += yytext;
-<CMTARGS>#%End		{ tcl_cmt_proc(true, yylineno);
-	yy_pop_state(); yyless(0); }
+<CMTARGS>#%End.*\n	{ tcl_cmt_proc(true, yylineno);
+	yy_pop_state(); }
 <CMTARGS>#%ProcedureRange { tcl_cmt_proc(true, yylineno);
 	yy_pop_state(); yyless(0); }
 
@@ -257,7 +257,7 @@ void tcl_cmt_short(QCString txt)
 	QRegExp args("^#%[ \\t]*Arguments[ \\t]*:");
 	QRegExp result("^#%[ \\t]*Results[ \\t]*:");
 	QRegExp req("^#%[ \\t]*Req[ \\t]*:");
-	QRegExp empty("^#%[ \\t]*:");
+	//QRegExp empty("^#%[ \\t]*:");
 	QRegExp nonwhite("[^ \\t]");
 	int index;
 	bool breq = false;
@@ -274,16 +274,19 @@ void tcl_cmt_short(QCString txt)
 		tcl.cmt_store_temp += "\\par Result\n";
 	} else if(txt.find(req) != -1) {
 		breq = true;
-	} else if(txt.find(empty) != -1) {
+	//} else if(txt.find(empty) != -1) {
 	} else { //just description
-	    desc = true;
+		desc = true;
 	}
 
 	if(!desc) {
-	    index = txt.find(':');
-	    assert(index != -1); // : was already found
-	    txt.remove(0,index+1); //remove everything including :
+		index = txt.find(':');
+		assert(index != -1); // : was already found
+		txt.remove(0,index+1); //remove everything including :
+	} else {
+		txt.remove(0,2); //remove #%
 	}
+		
 	index = txt.find(nonwhite);
 	assert(index != -1); // either char is found or \n
 	txt.remove(0,index);
@@ -544,23 +547,19 @@ void tcl_ns_init(QCString txt, int line)
 	tcl.t_current->e_inside = tcl.e_inside;
 
 	//check if some data were already collected
-	if(tcl.e_current != NULL) {
-		tcl.e_current->name = name;
-		tcl.e_current->section = Entry::NAMESPACE_SEC;
-		tcl.ns.insert(name, tcl.e_current);
-		tcl.entry.insert(0, tcl.e_current);
-		tcl.cmt_store_temp = "";
-	} else {
+	if(tcl.e_current == NULL)
 		tcl.e_current = tcl_entry_new();
-		tcl.e_current->name = name;
-		tcl.e_current->section = Entry::NAMESPACE_SEC;
-		tcl.ns.insert(name, tcl.e_current);
-		tcl.entry.insert(0, tcl.e_current);
-	}
+
+	tcl.e_current->name = name;
+	tcl.e_current->section = Entry::NAMESPACE_SEC;
+	tcl.ns.insert(name, tcl.e_current);
+	tcl.entry.insert(0, tcl.e_current);
 
 	inside->addSubEntry(tcl.e_current);
 	tcl.t_current->e_current = tcl.e_current;
 	tcl.e_inside = tcl.e_current;
+
+	tcl.cmt_store_temp = "";
 
 	tcl.e_current = NULL;
 	tcl.protection = Public;
@@ -834,6 +833,10 @@ void tcl_func_name(QCString txt)
 				inside = e;
 				e = NULL;
 			}
+			if(e != NULL) {
+				inside = e;
+				e = NULL;
+			}
 
 			index = name.find(':');
 		}while(index != -1);
@@ -894,9 +897,6 @@ void tcl_func_name(QCString txt)
 				tcl.e_current = tcl_entry_new();
 			}
 
-
-
-			tcl.cmt_store_temp = "";
 		} else {
 			tcl.e_current = e;
 		}
@@ -928,6 +928,8 @@ void tcl_func_name(QCString txt)
 	} else {
 		tcl_error(__FUNCTION__,__LINE__,"unrecongnised function typ");
 	}
+	
+	tcl.cmt_store_temp = "";
 }
 
 //! stores Argument string, if end is false, arg string has more lines
