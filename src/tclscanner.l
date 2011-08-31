@@ -160,22 +160,22 @@ KEYWORD [a-zA-Z]
 <QUOTEESC>.|\n          yy_pop_state();
 <QUOTE>"\""             yy_pop_state(); 
 
-^{WHITE}*#[^%].*\n                                     /* discard */
+^{WHITE}*#[^%].*                                       /* discard */
 
-^{WHITE}*#%ProcedureRange{WHITE}*\n                    yy_push_state(CMTRANGE);
-^{WHITE}*#%ProcedureArgs{WHITE}*\n                     yy_push_state(CMTARGS);
+^{WHITE}*#%ProcedureRange{WHITE}*                      yy_push_state(CMTRANGE);
+^{WHITE}*#%ProcedureArgs{WHITE}*                       yy_push_state(CMTARGS);
 
-^{WHITE}*#%{KEYWORD}+{WHITE}*:{WHITE}*.*\n             cmt_keyword(yytext);
-^{WHITE}*#%{WHITE}*:?.*\n                              cmt_briefdesc(yytext);
+^{WHITE}*#%{KEYWORD}+{WHITE}*:{WHITE}*.*               cmt_keyword(yytext);
+^{WHITE}*#%{WHITE}*:?.*                                cmt_briefdesc(yytext);
 
 info{WHITE}+[^\"\{\}\n]*\n      /* exclude info command */
 
 "{"               tcl_block_start(yylineno);
 "}"             { tcl_block_end(tcl.stack.pop(), yylineno); }
 
-namespace{WHITE}+eval{WHITE}+{NONWHITE}+{WHITE}+\{.*\n  { cmt_finish(yylineno); tcl_ns_init(yytext,yylineno); }
-class{WHITE}+[^ \t\n\{\}$]+{WHITE}+\{.*\n               { cmt_finish(yylineno); tcl_class_init(yytext, yylineno); }
-inherit{WHITE}.*\n                                        tcl_class_inherit(yytext, yylineno);
+namespace{WHITE}+eval{WHITE}+{NONWHITE}+{WHITE}+\{.*    { cmt_finish(yylineno); tcl_ns_init(yytext,yylineno); }
+class{WHITE}+[^ \t\n\{\}$]+{WHITE}+\{.*                 { cmt_finish(yylineno); tcl_class_init(yytext, yylineno); }
+inherit{WHITE}.*                                          tcl_class_inherit(yytext, yylineno);
 
 {WHITE}*(constructor|destructor){WHITE}+/\{                                                        { yy_push_state(FUNCARGS); tcl_func_name(yytext); yyless(strlen(yytext)-1); }
 {WHITE}*(public|private|protected){0,1}{WHITE}*(body|proc|method){WHITE}+[^ \t\n\{\}]+{WHITE}+/\{  { cmt_finish(yylineno); yy_push_state(FUNCARGS); tcl_func_name(yytext); }
@@ -266,7 +266,7 @@ fprintf(stdout,"cmt_briefdesc: txt: '%s'\n", (const char*)txt);
 	txt = txt.stripWhiteSpace();
 	if (txt.isEmpty()) return;
 	if (tcl.cmt_store_temp.isEmpty()) {tcl.cmt_store_temp += "@brief";}   // per default it's a brief description
-        tcl.cmt_store_temp += " " + txt;
+        tcl.cmt_store_temp += "\n" + txt;
 }
 
 //! stores comment to an entry
