@@ -4,5 +4,5 @@ rm -r /cmdata/www/doxy-gse4/*
 ../bin/doxygen doxyfile.gse4
 cp -r doxy-out/gse4/html/* /cmdata/www/doxy-gse4/
 chown -R www-data:www-data /cmdata/www/doxy-gse4
-chmod -r go-rwx /cmdata/www/doxy-gse4
+chmod -R go-rwx /cmdata/www/doxy-gse4
 
