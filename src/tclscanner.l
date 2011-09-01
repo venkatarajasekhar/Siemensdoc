@@ -115,18 +115,20 @@ static int yyread(char *buf, int max_size);
 void tcl_var_name(QCString txt, int line);
 void tcl_func_name(QCString txt);
 void tcl_func_args(QCString txt, int line);
-void tcl_func_body(QCString txt);
-void tcl_block_start(int line);
-void tcl_block_end(tcl_context* context, int line);
-void tcl_class_init(QCString txt, int line);
-void tcl_class_inherit(QCString txt, int line);
-void tcl_ns_init(QCString txt, int line);
 void tcl_entry_merge(Entry *res, Entry *e);
 void tcl_cmt_proc(bool args, int line);
 
-void cmt_keyword(QCString txt);
 void cmt_briefdesc(QCString txt);
 void cmt_finish(int line);
+void cmt_class(QCString txt, int line);
+void cmt_inherit(QCString txt, int line);
+void cmt_namespace(QCString txt, int line);
+
+void tcl_block_start(int line);
+void tcl_block_end(tcl_context* context, int line);
+
+const char* lstripchar(QCString txt, char c);
+const char* rstripchar(QCString txt, char c);
 
 //-----------------------------------------------------------------------
 #undef YY_INPUT
@@ -136,7 +138,8 @@ void cmt_finish(int line);
 
 WHITE [ \t]
 NONWHITE [^ \t\n]
-KEYWORD [a-zA-Z]
+KEYWORD [a-zA-Z0-9:_+.-]
+KEYWORDS [ a-zA-Z0-9:_+.-]
 
 %option yylineno
 %option noyywrap
@@ -161,25 +164,27 @@ KEYWORD [a-zA-Z]
 <QUOTE>"\""             yy_pop_state(); 
 
 ^{WHITE}*#[^%].*                                       /* discard */
+^{WHITE}*#%{WHITE}*@history.*                          /* discard */
+^{WHITE}*#%{WHITE}*@hide.*                             /* discard */
 
 ^{WHITE}*#%ProcedureRange{WHITE}*                      yy_push_state(CMTRANGE);
 ^{WHITE}*#%ProcedureArgs{WHITE}*                       yy_push_state(CMTARGS);
 
-^{WHITE}*#%{KEYWORD}+{WHITE}*:{WHITE}*.*               cmt_keyword(yytext);
-^{WHITE}*#%{WHITE}*:?.*                                cmt_briefdesc(yytext);
+^{WHITE}*#%.*                                          cmt_briefdesc(yytext);
 
 info{WHITE}+[^\"\{\}\n]*\n      /* exclude info command */
 
 "{"               tcl_block_start(yylineno);
 "}"             { tcl_block_end(tcl.stack.pop(), yylineno); }
 
-namespace{WHITE}+eval{WHITE}+{NONWHITE}+{WHITE}+\{.*    { cmt_finish(yylineno); tcl_ns_init(yytext,yylineno); }
-class{WHITE}+[^ \t\n\{\}$]+{WHITE}+\{.*                 { cmt_finish(yylineno); tcl_class_init(yytext, yylineno); }
-inherit{WHITE}.*                                          tcl_class_inherit(yytext, yylineno);
+namespace{WHITE}+eval{WHITE}+{KEYWORD}+{WHITE}*/\{    { cmt_finish(yylineno); cmt_namespace(yytext,yylineno); }
+class{WHITE}+{KEYWORD}+{WHITE}*/\{                    { cmt_finish(yylineno); cmt_class(yytext, yylineno); }
+inherit{WHITE}+{KEYWORDS}*                              cmt_inherit(yytext, yylineno);
 
-{WHITE}*(constructor|destructor){WHITE}+/\{                                                        { yy_push_state(FUNCARGS); tcl_func_name(yytext); yyless(strlen(yytext)-1); }
+{WHITE}*(constructor|destructor){WHITE}*/\{                                                        { yy_push_state(FUNCARGS); tcl_func_name(yytext); yyless(strlen(yytext)-1); }
 {WHITE}*(public|private|protected){0,1}{WHITE}*(body|proc|method){WHITE}+[^ \t\n\{\}]+{WHITE}+/\{  { cmt_finish(yylineno); yy_push_state(FUNCARGS); tcl_func_name(yytext); }
-{WHITE}*(public|private|protected){0,1}{WHITE}*variable{WHITE}+[A-Za-z0-9_<>]+[ \t\n]              { tcl_var_name(yytext, yylineno); }
+
+{WHITE}*(public|private|protected){0,1}{WHITE}*variable{WHITE}+{KEYWORD}+[ \t\n]              { tcl_var_name(yytext, yylineno); }
 
 <FUNCARGS>.*\n              { tcl_func_args(yytext, yylineno); }
 
@@ -230,41 +235,13 @@ void tcl_merge_entry(Entry* e1, Entry* e2)
         (void)e2;
 }
 
-void cmt_keyword(QCString txt)
-{
-        QRegExp author("^[ \t]*#%author[ \t]*:", 0);
-        QRegExp abstract("^[ \t]*#%abstract[ \t]*:", 0);
-	// arguments
-	// results
-        int index=-1;
-	bool found=0;
-
-        if (txt.find(author) != -1) {
-                tcl.cmt_store_temp += "@author ";
-		found=1;
-	} else if (txt.find(abstract) != -1) {
-                tcl.cmt_store_temp += "@details ";
-		found=1;
-        }
-
-	if (found) {
-	        index = txt.find(":");
-	        txt.remove(0,index+1);
-		txt = txt.simplifyWhiteSpace();
-		tcl.cmt_store_temp += txt;
-        }
-}
-
 void cmt_briefdesc(QCString txt)
 {
-fprintf(stdout,"cmt_briefdesc: txt: '%s'\n", (const char*)txt);
+//fprintf(stdout,"cmt_briefdesc: txt: '%s'\n", (const char*)txt);
         txt = txt.simplifyWhiteSpace();                 // remove white spaces inside and outside
         txt.remove(0,2);                                // remove #%
-        txt = txt.stripWhiteSpace();                    // remove whitespace
+        txt = txt.stripWhiteSpace();                    // remove whitespaces
 	if (txt.isEmpty()) return;                      // !txt.remove crashes on null string!
-	if (txt.at(0) == ':') {txt = txt.remove(0,1);}  // remove colons in the beginning of the string
-	txt = txt.stripWhiteSpace();
-	if (txt.isEmpty()) return;
 	if (tcl.cmt_store_temp.isEmpty()) {tcl.cmt_store_temp += "@brief";}   // per default it's a brief description
         tcl.cmt_store_temp += "\n" + txt;
 }
@@ -272,7 +249,7 @@ fprintf(stdout,"cmt_briefdesc: txt: '%s'\n", (const char*)txt);
 //! stores comment to an entry
 void cmt_finish(int line)
 {
-fprintf(stdout,"proc cmt_finish: cmt_store_temp: '%s'\n", (const char*)tcl.cmt_store_temp);
+//fprintf(stdout,"proc cmt_finish: cmt_store_temp: '%s'\n", (const char*)tcl.cmt_store_temp);
         int pos = 0;
         bool newentry=0;
 
@@ -283,7 +260,7 @@ fprintf(stdout,"proc cmt_finish: cmt_store_temp: '%s'\n", (const char*)tcl.cmt_s
 
         while(parseCommentBlock(tcl.this_parser, tcl.e_current, tcl.cmt_store_temp, tcl.file_name,
                                           line, FALSE, tcl.config_autobrief,
-                                FALSE, tcl.protection, pos,newentry)) {
+                                FALSE, tcl.protection, pos, newentry)) {
 
              if(newentry) {
                     fprintf(stdout,"New Entry! |%d|\n",line);
@@ -295,7 +272,6 @@ fprintf(stdout,"proc cmt_finish: cmt_store_temp: '%s'\n", (const char*)tcl.cmt_s
 
         if(newentry) {
                 fprintf(stdout,"New Entry! |%d|\n",line);
-                newentry = false;
                 tcl.e_inside->addSubEntry(tcl.e_current);
                 tcl.e_current = tcl_entry_new();
         }
@@ -332,7 +308,7 @@ void tcl_cmt_proc(bool args, int line)
 //! opens a new block, stores context onto the stack
 void tcl_block_start(int line)
 {
-//fprintf(stdout,"tcl_block_start: line: %i", line);
+//fprintf(stdout,"tcl_block_start: line: %i\n", line);
         if(tcl.t_current != NULL) {
                 tcl.stack.push(tcl.t_current);
                 tcl.t_current = NULL;
@@ -347,7 +323,7 @@ void tcl_block_start(int line)
 //! finishes an entry after the end of the block
 void tcl_block_end(tcl_context* context, int line)
 {
-//fprintf(stdout,"tcl_block_end: line: %i", line);
+//fprintf(stdout,"tcl_block_end: line: %i\n", line);
         if(context == NULL) {
                 fprintf(stderr,"%s: Warning, brace that was never opened found at line %d.\n",(const char*)tcl.file_name,line);
                 return;
@@ -362,59 +338,44 @@ void tcl_block_end(tcl_context* context, int line)
 }
 
 //! inits new namespace
-void tcl_ns_init(QCString txt, int line)
+void cmt_namespace(QCString txt, int line)
 {
-        QCString name, parent;
-        QRegExp white("[ \\t\n]");
+fprintf(stdout,"cmt_namespace: txt: '%s'\n", (const char*)txt);
+        QCString parent;
         int index;
         Entry* e;
         Entry* inside = tcl.e_inside;
 
-        index = txt.find('{');
-        assert(index != -1); //should not happen, ns always needs obrace
-        yyless(index);
-
-        index = txt.find(white); //find end of "namespace"
-        assert(index != -1); //as of regexp, it needs whitespace
-        txt.remove(0,index+1);
-        txt = txt.simplifyWhiteSpace();
-
-        index = txt.find(white); //find end of "eval"
-        if(index == -1)
-                tcl_error(__FUNCTION__,line,"no name found for namespace");
-        txt.remove(0,index+1);
-
-        index = txt.find(white); //find end of name
-        if(index == -1)
-                tcl_error(__FUNCTION__,line,"no name found for namespace");
-        name = txt.left(index);
+	// remove "namespace eval" so that name stands alone
+	txt = txt.simplifyWhiteSpace();
+	txt.remove(0,14); // namespace eval = 14 characters
+	txt = txt.stripWhiteSpace();
+	txt = lstripchar(txt, ':');
+	if (txt.isEmpty()) {return;}
 
         //namespace hierarchy processing
-        if(name.contains(':')) {
-                index = name.find(':'); //first time it exists
+        if(txt.contains(':')) {
+                index = txt.find(':'); //first time it exists
                 do {
-                        parent = name.left(index);
-                        name.remove(0,index+2); //include ::
-                        if(parent.isEmpty()) { //start ::namespace
-                                index = name.find(':');
-                                continue;
-                        }
-
-                        //create parent entries for namespaces
-                        e = tcl.ns.find(parent);
-                        if(e == NULL) {
+                        parent = txt.left(index);
+                        txt.remove(0,index);
+			txt = lstripchar(txt, ':');
+                        if(!parent.isEmpty()) {
+                            //create parent entries for namespaces
+                            e = tcl.ns.find(parent);
+                            if(e == NULL) {
                                 e = tcl_entry_new();
                                 e->name = parent;
                                 e->section = Entry::NAMESPACE_SEC;
-                                tcl.ns.insert(name,e);
+                                tcl.ns.insert(txt,e);
                                 tcl.entry.insert(0, e);
                                 inside->addSubEntry(e);
                                 inside = e;
                                 e = NULL;
+                            }
                         }
-
-                        index = name.find(':');
-                }while(index != -1);
+                        index = txt.find(':');
+                } while(index != -1);
         }
         //now only name is left
 
@@ -426,9 +387,9 @@ void tcl_ns_init(QCString txt, int line)
         if(tcl.e_current == NULL)
                 tcl.e_current = tcl_entry_new();
 
-        tcl.e_current->name = name;
+        tcl.e_current->name = txt;
         tcl.e_current->section = Entry::NAMESPACE_SEC;
-        tcl.ns.insert(name, tcl.e_current);
+        tcl.ns.insert(txt, tcl.e_current);
         tcl.entry.insert(0, tcl.e_current);
 
         inside->addSubEntry(tcl.e_current);
@@ -439,46 +400,34 @@ void tcl_ns_init(QCString txt, int line)
 
         tcl.e_current = NULL;
         tcl.protection = Public;
+}
 
-        //      printf("Namespace: |%s|\n",(const char*)name);
+const char* lstripchar(QCString txt, char c) {
+        if (txt.isEmpty()) {return txt;}
+        while (txt.at(0) == c) {
+	     txt.remove(0,1);
+	     if (txt.isEmpty()) {return txt;}
+        }
+	return txt;
+}
+
+const char* rstripchar(QCString txt, char c) {
+        if (txt.isEmpty()) {return txt;}
+        while (txt.at(txt.length()-1) == c) {
+	     txt.remove(txt.length()-1,1);
+	     if (txt.isEmpty()) {return txt;}
+        }
+	return txt;
 }
 
 //! inits new class entry
-void tcl_class_init(QCString txt, int line)
+void cmt_class(QCString txt, int line)
 {
-//fprintf(stderr,"tcl_class_init: '%s'",(const char*)txt);
-
-        QCString name;
-        QRegExp white("[ \\t]");
-        QRegExp nonwhite("[^ \\t\{]");
-        int index;
-
-        index = txt.find('{');
-        if(index == -1)
-                tcl_error(__FUNCTION__,__LINE__,
-                          "couldn't find an opening brace!");
-
-        yyless(index);  //put everything excluding opening brace back to scanner
-
-        index = txt.find(white);        //find end of "class"
-        if(index == -1)         //error
-                tcl_error(__FUNCTION__,__LINE__,"couldn't find whitespace");
-        txt.remove(0,index);
-
-        index = txt.find(nonwhite);
-        if(index == -1)
-                tcl_error(__FUNCTION__,__LINE__,"couldn't find a class name");
-        txt.remove(0,index);
-
-        index = txt.find(white);
-        if(index == -1) {
-                index = txt.find('{');
-                if(index == -1)
-                        tcl_error(__FUNCTION__,__LINE__,
-                                  "should not be reached, { was already found");
-        }
-
-        name = txt.left(index);
+fprintf(stderr,"cmt_class: '%s'\n",(const char*)txt);
+	// remove "class" so that name stands alone
+	txt = txt.stripWhiteSpace();
+	txt.remove(0,5); // class = 5 characters
+	txt = txt.stripWhiteSpace();
 
         //create new context
         tcl.t_current = new tcl_context();
@@ -486,18 +435,18 @@ void tcl_class_init(QCString txt, int line)
 
         //check if some data were already collected
         if(tcl.e_current != NULL) {
-                tcl.e_current->name = name;
+                tcl.e_current->name = txt;
                 tcl.e_current->section = Entry::CLASS_SEC;
+                tcl.cl.insert(txt, tcl.e_current);
 
-                tcl.cl.insert(name, tcl.e_current);
                 tcl.entry.insert(0, tcl.e_current);
                 tcl.cmt_store_temp = "";
         } else {
                 tcl.e_current = tcl_entry_new();
-                tcl.e_current->name = name;
+                tcl.e_current->name = txt;
                 tcl.e_current->section = Entry::CLASS_SEC;
 
-                tcl.cl.insert(name, tcl.e_current);
+                tcl.cl.insert(txt, tcl.e_current);
                 tcl.entry.insert(0, tcl.e_current);
         }
 
@@ -507,16 +456,13 @@ void tcl_class_init(QCString txt, int line)
 
         tcl.e_current = NULL;
         tcl.protection = Public;
-
-        //      printf("Klasse: |%s|\n",(const char*)name);
 }
 
 //! handles inheritance relation between classes
-void tcl_class_inherit(QCString txt, int line)
+void cmt_inherit(QCString txt, int line)
 {
-//fprintf(stderr,"tcl_class_inherit: '%s'",(const char*)txt);
+fprintf(stderr,"cmt_inherit: '%s'\n",(const char*)txt);
         QRegExp white("[ \\t]");
-        QRegExp nonwhite("^[ \\t\\n]");
         BaseInfo *inf;
         Entry *e = tcl.stack.top()->e_current;
         int index;
@@ -526,23 +472,12 @@ void tcl_class_inherit(QCString txt, int line)
         if(e->section != Entry::CLASS_SEC)
                 tcl_error(__FUNCTION__,line,"Inherit not in a Class");
 
-        index = txt.find(';'); //possible comment
-        if(index != -1) {
-                yyless(index);
-                txt.remove(index,txt.length()-1);
-        } else {
-                index = txt.find('#'); //possible end of command
-                if(index != -1) {
-                        yyless(index);
-                        txt.remove(index,txt.length()-1);
-                }
-        }
-
-        txt = txt.simplifyWhiteSpace();
-        index = txt.find(white);
-        assert(index != -1); //inherit hast to have a following string
-        txt.remove(0,index+1);
-
+	// remove "inherit" so that name stands alone
+	txt = txt.simplifyWhiteSpace();
+	txt.remove(0,7); // inherit = 7 characters
+	txt = txt.stripWhiteSpace();
+	if (txt.isEmpty()) {return;}
+	
         do {
                 index = txt.find(white);
                 inf = new BaseInfo(txt.left(index), Public, Normal);
@@ -690,36 +625,34 @@ fprintf(stderr,"tcl_func_name: txt: '%s'\n",(const char*)txt);
 
         //namespace/class hierarchy processing
         if(name.contains(':') && typ == "proc") {
+	        name = lstripchar(name, ':');
                 index = name.find(':'); //first time it exists
                 do {
                         parent = name.left(index);
-                        name.remove(0,index+2); //include ::
-                        if(parent.isEmpty()) { //start ::namespace
-                                index = name.find(':');
-                                continue;
+			name.remove(0,index);
+                        name = lstripchar(name, ':');
+                        if(!parent.isEmpty()) {
+                            //create parent entries for namespaces
+                            e = tcl.ns.find(parent);
+                            if(e == NULL)
+                                    e = tcl.cl.find(parent);
+                            if(e == NULL) {
+                                    e = tcl_entry_new();
+                                    e->name = parent;
+                                    e->section = Entry::NAMESPACE_SEC;
+                                    tcl.ns.insert(name,e);
+                                    tcl.entry.insert(0, e);
+                                    inside->addSubEntry(e);
+                                    inside = e;
+                                    e = NULL;
+                            }
+                            if(e != NULL) {
+                                    inside = e;
+                                    e = NULL;
+                            }
                         }
-
-                        //create parent entries for namespaces
-                        e = tcl.ns.find(parent);
-                        if(e == NULL)
-                                e = tcl.cl.find(parent);
-                        if(e == NULL) {
-                                e = tcl_entry_new();
-                                e->name = parent;
-                                e->section = Entry::NAMESPACE_SEC;
-                                tcl.ns.insert(name,e);
-                                tcl.entry.insert(0, e);
-                                inside->addSubEntry(e);
-                                inside = e;
-                                e = NULL;
-                        }
-                        if(e != NULL) {
-                                inside = e;
-                                e = NULL;
-                        }
-
                         index = name.find(':');
-                }while(index != -1);
+                } while(index != -1);
         }
         //now only name is left
 

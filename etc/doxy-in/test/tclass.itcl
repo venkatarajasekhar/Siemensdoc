@@ -1,0 +1,45 @@
+#% @file
+#% Contains the basic-test class
+class parentclass1 {
+}
+class parentclass2 {
+}
+
+#% @class basic-test
+#% beschreibung der basic-test klasse
+#% @details Description about the xbasic class.
+#% @copyright (c) by Siemens AG Oesterreich 2011
+#% @history $Log: basic.itcl,v $
+#% @history Revision 1.90.4.13  2011/08/31 17:26:37  perschak.t
+#% @history new commenting style
+#% @history
+#% @history Revision 1.90.4.12  2011/08/31 16:41:20  perschak.t
+#% @history new commenting style
+#% @history 
+class basic-test {
+    inherit parentclass1 parentclass2
+    constructor {}
+
+    public method test1 {}       ;#% brief description of method test1
+
+    public variable mybasicvar 1 ;#% description of variable1
+    private variable myprivate 2
+}
+
+#% @author thomas perschak
+#% @details genaue beschreibung von test1
+#% @todo do something
+#% @bug a new bug
+#% @return args is something new
+#% @code xbasic array examples @endcode
+#% @param par1 parameter1 description
+#% @param par2 parameter2 description
+#% @returns returns something
+body basic-test::test1 {par1 par2 args} {
+    #%ProcedureRange
+    #%ProcedureArgs
+    set options(a) 1
+    #%EndArgs
+}
+
+
