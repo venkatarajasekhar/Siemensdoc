@@ -563,6 +563,24 @@ static bool readCodeFragment(const char *fileName,
     int c=0;
     int col=0;
     int lineNr=1;
+    // for Tcl no preprocessing
+    int length=strlen(fileName);
+    if (length > 4 && strncmp(&fileName[length-4],".tcl",4)==0) {
+      char myBuffer[1024];
+
+      if (endLine < startLine) return FALSE;
+      result="";
+      while (fgets(myBuffer,1023,f) != NULL) {
+        if (lineNr >= startLine) {
+          result += myBuffer;
+        }
+        if (++lineNr > endLine) {
+          portable_fseek(f,0,SEEK_END);
+          break;
+        }
+      }
+      found = !result.isEmpty();
+    }
     // skip until the startLine has reached
     while (lineNr<startLine && !feof(f))
     {

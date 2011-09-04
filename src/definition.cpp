@@ -48,8 +48,7 @@ class DefinitionImpl
   public:
     DefinitionImpl();
    ~DefinitionImpl();
-    void init(const char *df,int dl,
-         const char *n);
+    void init(const char *df, const char *n);
 
     SectionDict *sectionDict;  // dictionary of all sections, not accessible
 
@@ -76,8 +75,9 @@ class DefinitionImpl
 
     // where the item was found
     QCString defFileName;
-    int      defLine;
     QCString defFileExt;
+
+    SrcLangExt lang;
 };
 
 DefinitionImpl::DefinitionImpl() 
@@ -101,8 +101,7 @@ DefinitionImpl::~DefinitionImpl()
   delete inbodyDocs;
 }
 
-void DefinitionImpl::init(const char *df,int dl,
-                          const char *n)
+void DefinitionImpl::init(const char *df, const char *n)
 {
   defFileName = df;
   int lastDot = defFileName.findRev('.');
@@ -110,7 +109,6 @@ void DefinitionImpl::init(const char *df,int dl,
   {
     defFileExt = defFileName.mid(lastDot);
   }
-  defLine = dl;
   QCString name = n;
   if (name!="<globalScope>") 
   {
@@ -135,6 +133,7 @@ void DefinitionImpl::init(const char *df,int dl,
   xrefListItems   = 0;
   hidden          = FALSE;
   isArtificial    = FALSE;
+  lang            = SrcLangExt_Unknown;
 }
 
 //-----------------------------------------------------------------------------------------
@@ -277,8 +276,9 @@ Definition::Definition(const char *df,int dl,
                        const char *d,bool isSymbol)
 {
   m_name = name;
+  m_defLine = dl;
   m_impl = new DefinitionImpl;
-  m_impl->init(df,dl,name);
+  m_impl->init(df,name);
   m_isSymbol = isSymbol;
   if (isSymbol) addToMap(name,this);
   _setBriefDescription(b,df,dl);
@@ -540,13 +540,13 @@ void Definition::setInbodyDocumentation(const char *d,const char *inbodyFile,int
 static bool readCodeFragment(const char *fileName,
                       int &startLine,int &endLine,QCString &result)
 {
-  static bool vhdlOpt           = Config_getBool("OPTIMIZE_OUTPUT_VHDL");
   static bool filterSourceFiles = Config_getBool("FILTER_SOURCE_FILES");
   //printf("readCodeFragment(%s,%d,%d)\n",fileName,startLine,endLine);
   if (fileName==0 || fileName[0]==0) return FALSE; // not a valid file name
   QCString filter = getFileFilter(fileName,TRUE);
   FILE *f=0;
   bool usePipe = !filter.isEmpty() && filterSourceFiles;
+  SrcLangExt lang = getLanguageFromFileName(fileName);
   if (!usePipe) // no filter given or wanted
   {
     f = portable_fopen(fileName,"r");
@@ -557,7 +557,11 @@ static bool readCodeFragment(const char *fileName,
     Debug::print(Debug::ExtCmd,0,"Executing popen(`%s`)\n",cmd.data());
     f = portable_popen(cmd,"r");
   }
-  bool found=vhdlOpt;  // for VHDL no bracket search is possible
+  bool found = lang==SrcLangExt_VHDL   || 
+               lang==SrcLangExt_Tcl    || 
+               lang==SrcLangExt_Python || 
+               lang==SrcLangExt_Fortran;  
+               // for VHDL, TCL, Python, and Fortran no bracket search is possible
   if (f)
   {
     int c=0;
@@ -903,12 +907,17 @@ void Definition::writeInlineCode(OutputList &ol,const char *scopeName)
 void Definition::_writeSourceRefList(OutputList &ol,const char *scopeName,
     const QCString &text,MemberSDict *members,bool /*funcOnly*/)
 {
+  LockingPtr<Definition> lock(this,this); // since this can be a memberDef 
+                                          // accessing other memberDefs prevent
+                                          // it from being flushed to disk
   static bool latexSourceCode = Config_getBool("LATEX_SOURCE_CODE"); 
   static bool sourceBrowser   = Config_getBool("SOURCE_BROWSER");
   static bool refLinkSource   = Config_getBool("REFERENCES_LINK_SOURCE");
   ol.pushGeneratorState();
   if (members)
   {
+    members->sort();
+
     ol.startParagraph();
     ol.parseText(text);
     ol.docify(" ");
@@ -931,14 +940,7 @@ void Definition::_writeSourceRefList(OutputList &ol,const char *scopeName,
         //printf("class=%p scope=%s scopeName=%s\n",md->getClassDef(),scope.data(),scopeName);
         if (!scope.isEmpty() && scope!=scopeName)
         {
-          if (Config_getBool("OPTIMIZE_OUTPUT_JAVA"))
-          {
-            name.prepend(scope+".");
-          }
-          else
-          {
-            name.prepend(scope+"::");
-          }
+          name.prepend(scope+getLanguageSpecificSeparator(m_impl->lang));
         }
         if (!md->isObjCMethod() &&
             (md->isFunction() || md->isSlot() || 
@@ -1087,7 +1089,7 @@ void Definition::addSourceReferencedBy(MemberDef *md)
     }
     if (m_impl->sourceRefByDict->find(name)==0)
     {
-      m_impl->sourceRefByDict->inSort(name,md);
+      m_impl->sourceRefByDict->append(name,md);
     }
   }
 }
@@ -1111,7 +1113,7 @@ void Definition::addSourceReferences(MemberDef *md)
     }
     if (m_impl->sourceRefsDict->find(name)==0)
     {
-      m_impl->sourceRefsDict->inSort(name,md);
+      m_impl->sourceRefsDict->append(name,md);
     }
   }
 }
@@ -1136,19 +1138,6 @@ QCString Definition::qualifiedName() const
     count--;
     return m_impl->qualifiedName;
   }
-#if 0
-  if (count>20)
-  {
-    printf("Definition::qualifiedName() Infinite recursion detected! Type=%d\n",definitionType());
-    printf("Trace:\n");
-    Definition *d = (Definition *)this;
-    for (int i=0;d && i<20;i++)
-    {
-      printf("  %s\n",d->name().data());
-      d = d->getOuterScope();
-    }
-  }
-#endif
   
   //printf("start %s::qualifiedName() localName=%s\n",name().data(),m_impl->localName.data());
   if (m_impl->outerScope==0) 
@@ -1361,7 +1350,6 @@ void Definition::writePathFragment(OutputList &ol) const
 void Definition::writeNavigationPath(OutputList &ol) const
 {
   static bool generateTreeView = Config_getBool("GENERATE_TREEVIEW");
-  static bool hasCustomFooter = !Config_getString("HTML_FOOTER").isEmpty();
 
   ol.pushGeneratorState();
   ol.disableAllBut(OutputGenerator::Html);
@@ -1374,13 +1362,7 @@ void Definition::writeNavigationPath(OutputList &ol) const
   ol.writeString("  <div id=\"nav-path\" class=\"navpath\">\n");
   ol.writeString("    <ul>\n");
   writePathFragment(ol);
-  if (!hasCustomFooter && generateTreeView) // write the doxygen logo as part of the navigation bar
-  {
-    ol.writeString("      <li class=\"footer\">");
-    ol.writeLogo();
-    ol.writeString("</li>\n");
-  }
-  if (!hasCustomFooter || !generateTreeView)
+  if (!generateTreeView)
   {
     ol.writeString("    </ul>\n");
     ol.writeString("  </div>\n");
@@ -1425,6 +1407,9 @@ QCString Definition::briefDescription() const
 QCString Definition::briefDescriptionAsTooltip() const
 {
   makeResident();
+  LockingPtr<Definition> lock(this,this); // since this can be a memberDef 
+                                          // accessing other memberDefs prevent
+                                          // it from being flushed to disk
   if (m_impl->brief)
   {
     if (m_impl->brief->tooltip.isEmpty() && !m_impl->brief->doc.isEmpty())
@@ -1493,12 +1478,6 @@ QCString Definition::getDefFileExtension() const
 { 
   makeResident();
   return m_impl->defFileExt; 
-}
-
-int Definition::getDefLine() const 
-{ 
-  makeResident();
-  return m_impl->defLine; 
 }
 
 bool Definition::isHidden() const
@@ -1582,9 +1561,10 @@ void Definition::setReference(const char *r)
   m_impl->ref=r; 
 }
 
-void Definition::_setSymbolName(const QCString &name) 
-{ 
-  m_symbolName=name; 
+SrcLangExt Definition::getLanguage() const
+{
+  makeResident();
+  return m_impl->lang;
 }
 
 void Definition::setHidden(bool b) 
@@ -1605,10 +1585,22 @@ void Definition::setLocalName(const QCString name)
   m_impl->localName=name; 
 }
 
+void Definition::setLanguage(SrcLangExt lang) 
+{ 
+  makeResident();
+  m_impl->lang=lang; 
+}
+
 void Definition::makeResident() const
 {
 }
 
+//---------------
+
+void Definition::_setSymbolName(const QCString &name) 
+{ 
+  m_symbolName=name; 
+}
 
 void Definition::flushToDisk() const
 {
@@ -1633,8 +1625,8 @@ void Definition::flushToDisk() const
   marshalBool         (Doxygen::symbolStorage,m_impl->isArtificial);
   marshalObjPointer   (Doxygen::symbolStorage,m_impl->outerScope);
   marshalQCString     (Doxygen::symbolStorage,m_impl->defFileName);
-  marshalInt          (Doxygen::symbolStorage,m_impl->defLine);
   marshalQCString     (Doxygen::symbolStorage,m_impl->defFileExt);
+  marshalInt          (Doxygen::symbolStorage,(int)m_impl->lang);
   marshalUInt(Doxygen::symbolStorage,END_MARKER);
   delete that->m_impl;
   that->m_impl = 0;
@@ -1665,8 +1657,8 @@ void Definition::loadFromDisk() const
   m_impl->isArtificial    = unmarshalBool         (Doxygen::symbolStorage);
   m_impl->outerScope      = (Definition *)unmarshalObjPointer   (Doxygen::symbolStorage);
   m_impl->defFileName     = unmarshalQCString     (Doxygen::symbolStorage);
-  m_impl->defLine         = unmarshalInt          (Doxygen::symbolStorage);
   m_impl->defFileExt      = unmarshalQCString     (Doxygen::symbolStorage);
+  m_impl->lang            = (SrcLangExt)unmarshalInt(Doxygen::symbolStorage);
   marker = unmarshalUInt(Doxygen::symbolStorage);
   assert(marker==END_MARKER);
 }

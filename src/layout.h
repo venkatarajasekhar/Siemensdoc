@@ -38,18 +38,20 @@ struct LayoutDocEntry
               AuthorSection,
               
               // Class specific items
-              ClassIncludes,
+              ClassIncludes, ClassInlineClasses,
               ClassInheritanceGraph, ClassNestedClasses,
               ClassCollaborationGraph, ClassAllMembersLink,
               ClassUsedFiles,
 
               // Namespace specific items
               NamespaceNestedNamespaces, NamespaceClasses,
+              NamespaceInlineClasses,
 
               // File specific items
               FileClasses, FileNamespaces, 
               FileIncludes, FileIncludeGraph, 
               FileIncludedByGraph, FileSourceLink,
+              FileInlineClasses,
 
               // Group specific items
               GroupClasses, GroupInlineClasses, GroupNamespaces,
@@ -121,7 +123,8 @@ struct LayoutNavEntry
       Files, 
       FileGlobals,
       Dirs, 
-      Examples
+      Examples,
+      User
     };
     LayoutNavEntry(LayoutNavEntry *parent,Kind k,bool vs,const QCString &bf, 
                    const QCString &tl,const QCString &intro,bool prepend=FALSE) 
@@ -173,7 +176,7 @@ class LayoutDocManager
     LayoutNavEntry *rootNavEntry() const;
 
     /** Parses a user provided layout */
-    void parse(QTextStream &t);
+    void parse(QTextStream &t,const char *fileName);
     void init();
   private:
     void addEntry(LayoutPart p,LayoutDocEntry*e);

@@ -26,6 +26,7 @@
 #include <qtextcodec.h>
 #include <unistd.h>
 #include <errno.h>
+#include <qptrdict.h>
 
 #include "version.h"
 #include "doxygen.h"
@@ -79,6 +80,8 @@
 #include "vhdlscanner.h"
 #include "vhdldocgen.h"
 #include "eclipsehelp.h"
+#include "cite.h"
+#include "filestorage.h"
 
 #include "layout.h"
 
@@ -109,6 +112,7 @@ FormulaDict      Doxygen::formulaNameDict(1009);   // the label name of all form
 PageSDict       *Doxygen::pageSDict = 0;
 PageSDict       *Doxygen::exampleSDict = 0;
 SectionDict      Doxygen::sectionDict(257);        // all page sections
+CiteDict        *Doxygen::citeDict=0;              // database of bibliographic references
 StringDict       Doxygen::aliasDict(257);          // aliases
 FileNameDict    *Doxygen::includeNameDict = 0;     // include names
 FileNameDict    *Doxygen::exampleNameDict = 0;     // examples
@@ -181,6 +185,7 @@ void clearAll()
   Doxygen::formulaDict.clear();      
   Doxygen::formulaNameDict.clear();  
   Doxygen::tagDestinationDict.clear();
+  delete Doxygen::citeDict;
   delete Doxygen::mainPage; Doxygen::mainPage=0;
 }
 
@@ -520,6 +525,7 @@ static void buildGroupListFiltered(EntryNav *rootNav,bool additional, bool inclu
         gd->setInbodyDocumentation( root->inbodyDocs, root->inbodyFile, root->inbodyLine );
         gd->addSectionsToDefinition(root->anchors);
         gd->setRefItems(root->sli);
+        gd->setLanguage(root->lang);
       }
       else
       {
@@ -538,6 +544,7 @@ static void buildGroupListFiltered(EntryNav *rootNav,bool additional, bool inclu
         gd->addSectionsToDefinition(root->anchors);
         Doxygen::groupSDict->append(root->name,gd);
         gd->setRefItems(root->sli);
+        gd->setLanguage(root->lang);
       }
     }
 
@@ -691,11 +698,10 @@ static void buildFileList(EntryNav *rootNav)
     else
     {
       const char *fn = root->fileName.data();
-      QCString text;
+      QCString text(4096);
       text.sprintf("warning: the name `%s' supplied as "
           "the second argument in the \\file statement ",
-          qPrint(root->name)
-                  );
+          qPrint(root->name));
       if (ambig) // name is ambiguous
       {
         text+="matches the following input files:\n";
@@ -1170,30 +1176,29 @@ static void addClassToContext(EntryNav *rootNav)
         fullName.data(),root->section,root->tArgLists ? (int)root->tArgLists->count() : -1);
     cd->setDocumentation(root->doc,root->docFile,root->docLine); // copy docs to definition
     cd->setBriefDescription(root->brief,root->briefFile,root->briefLine);
-    cd->setLanguage(root->lang);
-    cd->setHidden(root->hidden);
-    cd->setArtificial(root->artificial);
-    cd->setTypeConstraints(root->typeConstr);
-    //printf("new ClassDef %s tempArgList=%p specScope=%s\n",fullName.data(),root->tArgList,root->scopeSpec.data());
+    cd->setLanguage(root->lang);    
+    cd->setHidden(root->hidden);        
+    cd->setArtificial(root->artificial);        
+    cd->setTypeConstraints(root->typeConstr);   
+    //printf("new ClassDef %s tempArgList=%p specScope=%s\n",fullName.data(),root->tArgList,root->scopeSpec.data());    
 
-    ArgumentList *tArgList = 
-      getTemplateArgumentsFromName(fullName,root->tArgLists);
-    //printf("class %s template args=%s\n",fullName.data(),
-    //    tArgList ? tempArgListToString(tArgList).data() : "<none>");
-    cd->setTemplateArguments(tArgList);
-    cd->setProtection(root->protection);
-    cd->setIsStatic(root->stat);
+    ArgumentList *tArgList =    
+      getTemplateArgumentsFromName(fullName,root->tArgLists);   
+    //printf("class %s template args=%s\n",fullName.data(),     
+    //    tArgList ? tempArgListToString(tArgList).data() : "<none>");          
+    cd->setTemplateArguments(tArgList);         
+    cd->setProtection(root->protection);        
+    cd->setIsStatic(root->stat);        
 
-    // file definition containing the class cd
-    cd->setBodySegment(root->bodyLine,root->endBodyLine);
-    cd->setBodyDef(fd);
+    // file definition containing the class cd          
+    cd->setBodySegment(root->bodyLine,root->endBodyLine);       
+    cd->setBodyDef(fd);         
 
-    // see if the class is found inside a namespace 
-    //bool found=addNamespace(root,cd);
+    // see if the class is found inside a namespace     
+    //bool found=addNamespace(root,cd);         
 
-
-    // the empty string test is needed for extract all case
-    cd->setBriefDescription(root->brief,root->briefFile,root->briefLine);
+    // the empty string test is needed for extract all case     
+    cd->setBriefDescription(root->brief,root->briefFile,root->briefLine);    
     cd->insertUsedFile(root->fileName);
 
     // add class to the list
@@ -1349,6 +1354,184 @@ void distributeClassGroupRelations()
   }
 }
 
+//----------------------------
+
+static ClassDef *createTagLessInstance(ClassDef *rootCd,ClassDef *templ,const QCString &fieldName)
+{
+  QCString fullName = removeAnonymousScopes(templ->name());
+  if (fullName.right(2)=="::") fullName=fullName.left(fullName.length()-2);
+  fullName+="."+fieldName;
+  ClassDef *cd = new ClassDef(templ->getDefFileName(),
+                              templ->getDefLine(),
+                              fullName,
+                              templ->compoundType());
+  cd->setDocumentation(templ->documentation(),templ->docFile(),templ->docLine()); // copy docs to definition
+  cd->setBriefDescription(templ->briefDescription(),templ->briefFile(),templ->briefLine());
+  cd->setLanguage(templ->getLanguage());
+  cd->setBodySegment(templ->getStartBodyLine(),templ->getEndBodyLine());
+  cd->setBodyDef(templ->getBodyDef());
+  cd->setOuterScope(rootCd->getOuterScope());
+  if (rootCd->getOuterScope()!=Doxygen::globalScope)
+  {
+    rootCd->getOuterScope()->addInnerCompound(cd);
+  }
+  FileDef *fd = templ->getFileDef();
+  if (fd)
+  {
+    cd->setFileDef(fd);
+    fd->insertClass(cd);
+  }
+  LockingPtr<GroupList> groups = rootCd->partOfGroups();
+  if ( groups!=0 )
+  {
+    GroupListIterator gli(*groups);
+    GroupDef *gd;
+    for (gli.toFirst();(gd=gli.current());++gli)
+    {
+      cd->makePartOfGroup(gd);
+      gd->addClass(cd);
+    }
+  }
+  //cd->insertUsedFile(root->fileName);
+  //printf("** adding class %s based on %s\n",fullName.data(),templ->name().data());
+  Doxygen::classSDict->append(fullName,cd);
+
+  MemberList *ml = templ->getMemberList(MemberList::pubAttribs);
+  if (ml)
+  {
+    MemberListIterator li(*ml);
+    MemberDef *md;
+    for (li.toFirst();(md=li.current());++li)
+    {
+      //printf("    Member %s type=%s\n",md->name().data(),md->typeString());
+      MemberDef *imd = new MemberDef(md->getDefFileName(),md->getDefLine(),
+                                     md->typeString(),md->name(),md->argsString(),md->excpString(),
+                                     md->protection(),md->virtualness(),md->isStatic(),Member,
+                                     md->memberType(),
+                                     0,0);
+      imd->setMemberClass(cd);
+      imd->setDocumentation(md->documentation(),md->docFile(),md->docLine());
+      imd->setBriefDescription(md->briefDescription(),md->briefFile(),md->briefLine());
+      imd->setInbodyDocumentation(md->inbodyDocumentation(),md->inbodyFile(),md->inbodyLine());
+      imd->setMemberSpecifiers(md->getMemberSpecifiers());
+      imd->setMemberGroupId(md->getMemberGroupId());
+      imd->setInitializer(md->initializer());
+      imd->setMaxInitLines(md->initializerLines());
+      imd->setBitfields(md->bitfieldString());
+      imd->setLanguage(md->getLanguage());
+      cd->insertMember(imd);
+    }
+  }
+  return cd;
+}
+
+/** Look through the members of class \a cd and its public members.
+ *  If there is a member m of a tag less struct/union, 
+ *  then we create a duplicate of the struct/union with the name of the 
+ *  member to identify it.
+ *  So if cd has name S, then the tag less struct/union will get name S.m
+ *  Since tag less structs can be nested we need to call this function
+ *  recursively. Later on we need to patch the member types so we keep
+ *  track of the hierarchy of classes we create.
+ */
+static void processTagLessClasses(ClassDef *rootCd,
+                                  ClassDef *cd,
+                                  ClassDef *tagParentCd,
+                                  const QCString &prefix,int count)
+{
+  //printf("%d: processTagLessClasses %s\n",count,cd->name().data());
+  //printf("checking members for %s\n",cd->name().data());
+  if (cd->getInnerClasses())
+  {
+    MemberList *ml = cd->getMemberList(MemberList::pubAttribs);
+    if (ml)
+    {
+      MemberListIterator li(*ml);
+      MemberDef *md;
+      for (li.toFirst();(md=li.current());++li)
+      {
+        QCString type = md->typeString();
+        if (type.find("::@")!=-1) // member of tag less struct/union
+        {
+          ClassSDict::Iterator it(*cd->getInnerClasses());
+          ClassDef *icd;
+          for (it.toFirst();(icd=it.current());++it)
+          {
+            //printf("  member %s: type='%s'\n",md->name().data(),type.data());
+            //printf("  comparing '%s'<->'%s'\n",type.data(),icd->name().data());
+            if (type.find(icd->name())!=-1) // matching tag less struct/union
+            {
+              QCString name = md->name();
+              if (name.at(0)=='@') name = "__unnamed__";
+              if (!prefix.isEmpty()) name.prepend(prefix+".");
+              //printf("    found %s for class %s\n",name.data(),cd->name().data());
+              ClassDef *ncd = createTagLessInstance(rootCd,icd,name);
+              processTagLessClasses(rootCd,icd,ncd,name,count+1);
+              //printf("    addTagged %s to %s\n",ncd->name().data(),cd->name().data());
+              tagParentCd->addTaggedInnerClass(ncd);
+              ncd->setTagLessReference(icd);
+
+              // replace tag-less type for generated/original member
+              // by newly created class name.
+              // note the difference between changing cd and tagParentCd.
+              // for the initial call this is the same pointer, but for 
+              // recursive calls cd is the original tag-less struct (of which
+              // there is only one instance) and tagParentCd is the newly
+              // generated tagged struct of which there can be multiple instances!
+              MemberList *pml = tagParentCd->getMemberList(MemberList::pubAttribs);
+              if (pml)
+              {
+                MemberListIterator pli(*pml);
+                MemberDef *pmd;
+                for (pli.toFirst();(pmd=pli.current());++pli)
+                {
+                  if (pmd->name()==md->name())
+                  {
+                    pmd->setType(substitute(pmd->typeString(),icd->name(),ncd->name()));
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+static void findTagLessClasses(ClassDef *cd)
+{
+  if (cd->getInnerClasses())
+  {
+    ClassSDict::Iterator it(*cd->getInnerClasses());
+    ClassDef *icd;
+    for (it.toFirst();(icd=it.current());++it)
+    {
+      if (icd->name().find("@")==-1) // process all non-anonymous inner classes
+      {
+        findTagLessClasses(icd);
+      }
+    }
+  }
+
+  processTagLessClasses(cd,cd,cd,"",0); // process tag less inner struct/classes (if any)
+}
+
+static void findTagLessClasses()
+{
+  ClassSDict::Iterator cli(*Doxygen::classSDict);
+  ClassDef *cd;
+  for (cli.toFirst();(cd=cli.current());++cli) // for each class
+  {
+    Definition *scope = cd->getOuterScope();
+    if (scope && scope->definitionType()!=Definition::TypeClass) // that is not nested
+    {
+      findTagLessClasses(cd);
+    }
+  }
+}
+
+
 //----------------------------------------------------------------------
 // build a list of all namespaces mentioned in the documentation
 // and all namespaces that have a documentation block before their definition.
@@ -1381,42 +1564,14 @@ static void buildNamespaceList(EntryNav *rootNav)
       NamespaceDef *nd;
       if ((nd=Doxygen::namespaceSDict->find(fullName))) // existing namespace
       {
-#if 0
-        if (!root->doc.isEmpty() || !root->brief.isEmpty()) // block contains docs
-        { 
-          if (nd->documentation().isEmpty() && !root->doc.isEmpty())
-          {
-#endif
-            nd->setDocumentation(root->doc,root->docFile,root->docLine);
-            nd->setName(fullName); // change name to match docs
-            nd->addSectionsToDefinition(root->anchors);
-#if 0
-          }
-          else if (!nd->documentation().isEmpty() && !root->doc.isEmpty())
-          {
-            warn(
-                 root->fileName,root->startLine,
-                 "warning: namespace %s already has a detailed description found in file %s at line %d. "
-                 "Skipping the documentation found here.",
-                 fullName.data(),nd->docFile().data(),nd->docLine());
-          }
-          if (nd->briefDescription().isEmpty() && !root->brief.isEmpty())
-          {
-#endif
-            nd->setBriefDescription(root->brief,root->briefFile,root->briefLine);
-#if 0
-            nd->setName(fullName); // change name to match docs
-          }
-          else if (!nd->briefDescription().isEmpty() && !root->brief.isEmpty())
-          {
-            warn(root->fileName,root->startLine,
-                 "warning: namespace %s already has a brief description found in file %s at line %d. "
-                 "Skipping the documentation found here.",
-                 fullName.data(),nd->docFile().data(),nd->docLine()
-                );
-          }
+        nd->setDocumentation(root->doc,root->docFile,root->docLine);
+        nd->setName(fullName); // change name to match docs
+        nd->addSectionsToDefinition(root->anchors);
+        nd->setBriefDescription(root->brief,root->briefFile,root->briefLine);
+        if (nd->getLanguage()==SrcLangExt_Unknown)
+        {
+          nd->setLanguage(root->lang);
         }
-#endif
 
         // file definition containing the namespace nd
         FileDef *fd=rootNav->fileDef();
@@ -1434,13 +1589,14 @@ static void buildNamespaceList(EntryNav *rootNav)
           tagName=rootNav->tagInfo()->tagName;
           tagFileName=rootNav->tagInfo()->fileName;
         }
-        //printf("++ new namespace %s\n",fullName.data());
+        //printf("++ new namespace %s lang=%s\n",fullName.data(),langToString(root->lang).data());
         NamespaceDef *nd=new NamespaceDef(root->fileName,root->startLine,fullName,tagName,tagFileName);
         nd->setDocumentation(root->doc,root->docFile,root->docLine); // copy docs to definition
         nd->setBriefDescription(root->brief,root->briefFile,root->briefLine);
         nd->addSectionsToDefinition(root->anchors);
         nd->setHidden(root->hidden);
         nd->setArtificial(root->artificial);
+        nd->setLanguage(root->lang);
 
         //printf("Adding namespace to group\n");
         addNamespaceToGroups(root,nd);
@@ -1525,7 +1681,7 @@ static void findUsingDirectives(EntryNav *rootNav)
       // see if the using statement was found inside a namespace or inside
       // the global file scope.
       if (rootNav->parent() && rootNav->parent()->section()==Entry::NAMESPACE_SEC &&
-          (fd==0 || !fd->isJava()) // not a .java file
+          (fd==0 || fd->getLanguage()!=SrcLangExt_Java) // not a .java file
          )
       {
         nsName=stripAnonymousNamespaceScope(rootNav->parent()->name());
@@ -1602,7 +1758,7 @@ static void findUsingDirectives(EntryNav *rootNav)
       }
       else // unknown namespace, but add it anyway.
       {
-        //printf("++ new unknown namespace %s\n",name.data());
+        //printf("++ new unknown namespace %s lang=%s\n",name.data(),langToString(root->lang).data());
         NamespaceDef *nd=new NamespaceDef(root->fileName,root->startLine,name);
         nd->setDocumentation(root->doc,root->docFile,root->docLine); // copy docs to definition
         nd->setBriefDescription(root->brief,root->briefFile,root->briefLine);
@@ -1610,6 +1766,7 @@ static void findUsingDirectives(EntryNav *rootNav)
         //printf("** Adding namespace %s hidden=%d\n",name.data(),root->hidden);
         nd->setHidden(root->hidden);
         nd->setArtificial(TRUE);
+        nd->setLanguage(root->lang);
 
         QListIterator<Grouping> gli(*root->groups);
         Grouping *g;
@@ -1721,6 +1878,7 @@ static void findUsingDeclarations(EntryNav *rootNav)
                      name,ClassDef::Class);
         Doxygen::hiddenClasses->append(root->name,usingCd);
         usingCd->setArtificial(TRUE);
+        usingCd->setLanguage(root->lang);
       }
       else
       {
@@ -1830,6 +1988,7 @@ static void findUsingDeclImports(EntryNav *rootNav)
                   newMd->setMaxInitLines(md->initializerLines());
                   newMd->setMemberGroupId(root->mGrpId);
                   newMd->setMemberSpecifiers(md->getMemberSpecifiers());
+                  newMd->setLanguage(root->lang);
 
                   rootNav->releaseEntry();
                 }
@@ -1893,7 +2052,8 @@ static MemberDef *addVariableToClass(
 
   QCString qualScope = cd->qualifiedNameWithTemplateParameters();
   QCString scopeSeparator="::";
-  if (Config_getBool("OPTIMIZE_OUTPUT_JAVA"))
+  SrcLangExt lang = cd->getLanguage();
+  if (lang==SrcLangExt_Java || lang==SrcLangExt_CSharp)
   {
     qualScope = substitute(qualScope,"::",".");
     scopeSeparator=".";
@@ -1997,6 +2157,7 @@ static MemberDef *addVariableToClass(
   md->enableCallerGraph(root->callerGraph);
   md->setHidden(root->hidden);
   md->setArtificial(root->artificial);
+  md->setLanguage(root->lang);
   addMemberToGroups(root,md);
   //if (root->mGrpId!=-1) 
   //{
@@ -2105,9 +2266,8 @@ static MemberDef *addVariableToFile(
      )
     // variable is inside a namespace, so put the scope before the name
   {
-    static bool optimizeForJava = Config_getBool("OPTIMIZE_OUTPUT_JAVA");
-    QCString sep="::";
-    if (optimizeForJava) sep=".";
+    SrcLangExt lang = nd->getLanguage();
+    QCString sep=getLanguageSpecificSeparator(lang);
     
     if (!root->type.isEmpty())
     {
@@ -2162,7 +2322,7 @@ static MemberDef *addVariableToFile(
         if (md->getFileDef() &&
             ! // not a php array
              (
-               (getLanguageFromFileName(md->getFileDef()->name())==SrcLangExt_PHP) &&
+               (md->getLanguage()==SrcLangExt_PHP) &&
                (md->argsString()!=root->args && root->args.find('[')!=-1)
              )
            ) 
@@ -2197,6 +2357,7 @@ static MemberDef *addVariableToFile(
   md->setMaxInitLines(root->initLines);
   md->setMemberGroupId(root->mGrpId);
   md->setDefinition(def);
+  md->setLanguage(root->lang);
   md->enableCallGraph(root->callGraph);
   md->enableCallerGraph(root->callerGraph);
   md->setExplicitExternal(root->explicitExternal);
@@ -2244,7 +2405,7 @@ static MemberDef *addVariableToFile(
  */
 static int findFunctionPtr(const QCString &type,int lang, int *pLength=0)
 {
-  if (lang == SrcLangExt_F90) return -1; // Fortran does not have function pointers
+  if (lang == SrcLangExt_Fortran) return -1; // Fortran does not have function pointers
   static const QRegExp re("([^)]*[\\*\\^][^)]*)");
   int i=-1,l;
   if (!type.isEmpty() &&             // return type is non-empty
@@ -2399,12 +2560,13 @@ static void addVariable(EntryNav *rootNav,int isFuncPtr=-1)
 
     Debug::print(Debug::Variables,0,
                   "VARIABLE_SEC: \n"
-                  "  type=`%s' name=`%s' args=`%s' bodyLine=`%d' mGrpId=%d\n",
+                  "  type=`%s' name=`%s' args=`%s' bodyLine=`%d' mGrpId=%d relates=%s\n",
                    root->type.data(),
                    root->name.data(),
                    root->args.data(),
                    root->bodyLine,
-                   root->mGrpId
+                   root->mGrpId,
+                   root->relates.data()
                 );
     //printf("root->parent->name=%s\n",root->parent->name.data());
 
@@ -2532,8 +2694,8 @@ static void addVariable(EntryNav *rootNav,int isFuncPtr=-1)
     {
       MemberDef *md=0;
 
-      // if cd is an anonymous scope we insert the member 
-      // into a non-anonymous scope as well. This is needed to
+      // if cd is an anonymous (=tag less) scope we insert the member 
+      // into a non-anonymous parent scope as well. This is needed to
       // be able to refer to it using \var or \fn
 
       //int indentDepth=0;
@@ -2541,11 +2703,12 @@ static void addVariable(EntryNav *rootNav,int isFuncPtr=-1)
       //int anonyScopes = 0;
       bool added=FALSE;
       
-      if (si!=-1) // anonymous scope
+      static bool inlineSimpleStructs = Config_getBool("INLINE_SIMPLE_STRUCTS");
+      if (si!=-1 && !inlineSimpleStructs) // anonymous scope or type
       {
         QCString pScope;
         ClassDef *pcd=0;
-        pScope = scope.left(QMAX(si-2,0));
+        pScope = scope.left(QMAX(si-2,0)); // scope without tag less parts
         if (!pScope.isEmpty())
           pScope.prepend(annScopePrefix);
         else if (annScopePrefix.length()>2)
@@ -2676,7 +2839,8 @@ static void addMethodToClass(EntryNav *rootNav,ClassDef *cd,
   int l,i=-1;
   static QRegExp re("([a-z_A-Z0-9: ]*[ &*]+[ ]*");
 
-  if (!root->type.isEmpty() && (i=re.match(root->type,0,&l))!=-1) // function variable
+  if (cd->getLanguage()==SrcLangExt_Cpp && // only C has pointers
+      !root->type.isEmpty() && (i=re.match(root->type,0,&l))!=-1) // function variable
   {
     root->args+=root->type.right(root->type.length()-i-l);
     root->type=root->type.left(i+l);
@@ -2693,7 +2857,7 @@ static void addMethodToClass(EntryNav *rootNav,ClassDef *cd,
   else                          mtype=MemberDef::Function;
 
   // strip redundant template specifier for constructors
-  if ((fd==0 || getLanguageFromFileName(fd->name())==SrcLangExt_Cpp) &&
+  if ((fd==0 || fd->getLanguage()==SrcLangExt_Cpp) &&
      name.left(9)!="operator " && (i=name.find('<'))!=-1 && name.find('>')!=-1)
   {
     name=name.left(i); 
@@ -2722,17 +2886,23 @@ static void addMethodToClass(EntryNav *rootNav,ClassDef *cd,
   md->setMemberSpecifiers(root->spec);
   md->setMemberGroupId(root->mGrpId);
   md->setTypeConstraints(root->typeConstr);
+  md->setLanguage(root->lang);
   md->setBodyDef(fd);
   md->setFileDef(fd);
   //md->setScopeTemplateArguments(root->tArgList);
   md->addSectionsToDefinition(root->anchors);
   QCString def;
   QCString qualScope = cd->qualifiedNameWithTemplateParameters();
-  QCString scopeSeparator="::";
-  if (Config_getBool("OPTIMIZE_OUTPUT_JAVA"))
+  SrcLangExt lang = cd->getLanguage();
+  QCString scopeSeparator=getLanguageSpecificSeparator(lang);
+  if (scopeSeparator!="::")
   {
-    qualScope = substitute(qualScope,"::",".");
-    scopeSeparator=".";
+    qualScope = substitute(qualScope,"::",scopeSeparator);
+  }
+  if (lang==SrcLangExt_PHP)
+  {
+    // for PHP we use Class::method and Namespace\method
+    scopeSeparator="::";
   }
   if (!root->relates.isEmpty() || isFriend || Config_getBool("HIDE_SCOPE_NAMES"))
   {
@@ -2907,8 +3077,9 @@ static void buildFunctionList(EntryNav *rootNav)
           cd &&
           // do some fuzzy things to exclude function pointers 
           (root->type.isEmpty() || 
-           (root->type.find(re,0)==-1 || root->args.find(")[")!=-1) ||  // type contains ..(..* and args not )[.. -> function pointer
-           root->type.find(")(")!=-1 || root->type.find("operator")!=-1 // type contains ..)(.. and not "operator"
+           (root->type.find(re,0)==-1 || root->args.find(")[")!=-1) ||     // type contains ..(..* and args not )[.. -> function pointer
+           root->type.find(")(")!=-1 || root->type.find("operator")!=-1 || // type contains ..)(.. and not "operator"
+           cd->getLanguage()!=SrcLangExt_Cpp                               // language other than C
           )
          )
       {
@@ -3080,6 +3251,7 @@ static void buildFunctionList(EntryNav *rootNav)
               MemberDef::Function,tArgList,root->argList);
 
           md->setTagInfo(rootNav->tagInfo());
+          md->setLanguage(root->lang);
           //md->setDefFile(root->fileName);
           //md->setDefLine(root->startLine);
           md->setDocumentation(root->doc,root->docFile,root->docLine);
@@ -3110,14 +3282,12 @@ static void buildFunctionList(EntryNav *rootNav)
 
           if (!scope.isEmpty())
           {
-            if (Config_getBool("OPTIMIZE_OUTPUT_JAVA"))
+            QCString sep = getLanguageSpecificSeparator(root->lang);
+            if (sep!="::")
             {
-              scope = substitute(scope,"::",".")+".";
+              scope = substitute(scope,"::",sep);
             }
-            else
-            {
-              scope+="::";
-            }
+            scope+=sep;
           }
 
           QCString def;
@@ -3764,7 +3934,7 @@ static void findUsedClassesForClass(EntryNav *rootNav,
           }
 
           //printf("      template substitution gives=%s\n",type.data());
-          while (!found && extractClassNameFromType(type,pos,usedClassName,templSpec)!=-1)
+          while (!found && extractClassNameFromType(type,pos,usedClassName,templSpec,rootNav->lang())!=-1)
           {
             // find the type (if any) that matches usedClassName
             ClassDef *typeCd = getResolvedClass(masterCd,
@@ -3822,14 +3992,15 @@ static void findUsedClassesForClass(EntryNav *rootNav,
                     //printf("making %s a template argument!!!\n",usedCd->name().data());
                     usedCd->makeTemplateArgument();
                     usedCd->setUsedOnly(TRUE);
+                    usedCd->setLanguage(masterCd->getLanguage());
                     Doxygen::hiddenClasses->append(usedName,usedCd);
                   }
                   if (usedCd)
                   {
                     if (isArtificial) usedCd->setArtificial(TRUE);
                     Debug::print(Debug::Classes,0,"      Adding used class `%s' (1)\n", usedCd->name().data());
-                    instanceCd->addUsedClass(usedCd,md->name());
-                    usedCd->addUsedByClass(instanceCd,md->name());
+                    instanceCd->addUsedClass(usedCd,md->name(),md->protection());
+                    usedCd->addUsedByClass(instanceCd,md->name(),md->protection());
                   }
                 }
               }
@@ -3845,8 +4016,8 @@ static void findUsedClassesForClass(EntryNav *rootNav,
               {
                 found=TRUE;
                 Debug::print(Debug::Classes,0,"    Adding used class `%s' (2)\n", usedCd->name().data());
-                instanceCd->addUsedClass(usedCd,md->name()); // class exists 
-                usedCd->addUsedByClass(instanceCd,md->name());
+                instanceCd->addUsedClass(usedCd,md->name(),md->protection()); // class exists 
+                usedCd->addUsedByClass(instanceCd,md->name(),md->protection());
               }
             }
             if (delTempNames)
@@ -3869,14 +4040,15 @@ static void findUsedClassesForClass(EntryNav *rootNav,
                   masterCd->getDefFileName(),masterCd->getDefLine(),
                   type,ClassDef::Class);
               usedCd->setUsedOnly(TRUE);
+              usedCd->setLanguage(masterCd->getLanguage());
               Doxygen::hiddenClasses->append(type,usedCd);
             }
             if (usedCd)
             {
               if (isArtificial) usedCd->setArtificial(TRUE);
               Debug::print(Debug::Classes,0,"    Adding used class `%s' (3)\n", usedCd->name().data());
-              instanceCd->addUsedClass(usedCd,md->name()); 
-              usedCd->addUsedByClass(instanceCd,md->name());
+              instanceCd->addUsedClass(usedCd,md->name(),md->protection()); 
+              usedCd->addUsedByClass(instanceCd,md->name(),md->protection());
             }
           }
         }
@@ -4356,8 +4528,8 @@ static bool findClassRelation(
         else if (mode==Undocumented && (scopeOffset==0 || isATemplateArgument))
         {
           Debug::print(Debug::Classes,0,
-                       "    New undocumented base class `%s' baseClassName=%s\n",
-                       biName.data(),baseClassName.data()
+                       "    New undocumented base class `%s' baseClassName=%s isArtificial=%d\n",
+                       biName.data(),baseClassName.data(),isArtificial
                       );
           baseClass=0;
           if (isATemplateArgument)
@@ -4369,6 +4541,7 @@ static bool findClassRelation(
                                  baseClassName,ClassDef::Class);
               Doxygen::hiddenClasses->append(baseClassName,baseClass);
               if (isArtificial) baseClass->setArtificial(TRUE);
+              baseClass->setLanguage(root->lang);
             }
           }
           else
@@ -4382,6 +4555,7 @@ static bool findClassRelation(
                   baseClassName,ClassDef::Class);
               Doxygen::classSDict->append(baseClassName,baseClass);
               if (isArtificial) baseClass->setArtificial(TRUE);
+              baseClass->setLanguage(root->lang);
             }
           }
           // add base class to this class
@@ -5045,14 +5219,14 @@ static bool findGlobalMember(EntryNav *rootNav,
       QCString fullFuncDecl=decl;
       if (root->argList) fullFuncDecl+=argListToString(root->argList,TRUE);
       QCString warnMsg =
-         QCString("warning: no matching file member found for \n")+fullFuncDecl;
+         QCString("warning: no matching file member found for \n")+substitute(fullFuncDecl,"%","%%");
       if (mn->count()>0)
       {
         warnMsg+="Possible candidates:\n";
         for (mni.toFirst();(md=mni.current());++mni)
         {
           warnMsg+="  ";
-          warnMsg+=md->declaration();
+          warnMsg+=substitute(md->declaration(),"%","%%");
           warnMsg+='\n';
         }
       }
@@ -5831,6 +6005,7 @@ static void findMember(EntryNav *rootNav,
               mtype,tArgList,root->argList);
           //printf("new specialized member %s args=`%s'\n",md->name().data(),funcArgs.data());
           md->setTagInfo(rootNav->tagInfo());
+          md->setLanguage(root->lang);
           md->setMemberClass(cd);
           md->setTemplateSpecialization(TRUE);
           md->setTypeConstraints(root->typeConstr);
@@ -5894,6 +6069,7 @@ static void findMember(EntryNav *rootNav,
               root->protection,root->virt,root->stat,Related,
               mtype,tArgList,root->argList);
           md->setTagInfo(rootNav->tagInfo());
+          md->setLanguage(root->lang);
           md->setTypeConstraints(root->typeConstr);
           md->setMemberClass(cd);
           md->setDefinition(funcDecl);
@@ -5942,16 +6118,17 @@ static void findMember(EntryNav *rootNav,
       {
         bool newMember=TRUE; // assume we have a new member
         bool newMemberName=FALSE; 
+        MemberDef *mdDefine=0;
         bool isDefine=FALSE;
         {
           MemberName *mn = Doxygen::functionNameSDict->find(funcName);
           if (mn)
           {
-            MemberDef *md = mn->first();
-            while (md && !isDefine)
+            mdDefine = mn->first();
+            while (mdDefine && !isDefine)
             {
-              isDefine = isDefine || md->isDefine();
-              md = mn->next();
+              isDefine = isDefine || mdDefine->isDefine();
+              if (!isDefine) mdDefine = mn->next();
             }
           }
         }
@@ -5971,6 +6148,7 @@ static void findMember(EntryNav *rootNav,
             LockingPtr<ArgumentList> rmdAl = rmd->argumentList();
 
             newMember=
+              className!=rmd->getOuterScope()->name() ||
               !matchArguments2(rmd->getOuterScope(),rmd->getFileDef(),rmdAl.pointer(),
                                cd,fd,root->argList,
                                TRUE);
@@ -5998,19 +6176,17 @@ static void findMember(EntryNav *rootNav,
           else
             mtype=MemberDef::Function;
 
+          if (isDefine && mdDefine)
+          {
+            mdDefine->setHidden(TRUE);
+            funcType="#define";
+            funcArgs=mdDefine->argsString();
+            funcDecl=funcType + " " + funcName;
+          } 
+
           //printf("New related name `%s' `%d'\n",funcName.data(),
           //    root->argList ? (int)root->argList->count() : -1);
 
-          // new related (member) function
-#if 0 // removed as it doesn't handle related template functions correctly
-          ArgumentList *tArgList = 
-            getTemplateArgumentsFromName(scopeName+"::"+funcName,root->tArgLists);
-          MemberDef *md=new MemberDef(
-              root->fileName,root->startLine,
-              funcType,funcName,funcArgs,exceptions,
-              root->protection,root->virt,root->stat,TRUE,
-              mtype,tArgList,funcArgs.isEmpty() ? 0 : root->argList);
-#endif
           // first note that we pass:
           //   (root->tArgLists ? root->tArgLists->last() : 0)
           // for the template arguments fo the new "member."
@@ -6026,6 +6202,12 @@ static void findMember(EntryNav *rootNav,
               mtype,
               (root->tArgLists ? root->tArgLists->last() : 0),
               funcArgs.isEmpty() ? 0 : root->argList);
+
+          if (isDefine && mdDefine)
+          {
+            md->setInitializer(mdDefine->initializer());
+          }
+
           // 
           // we still have the problem that
           // MemberDef::writeDocumentation() in memberdef.cpp
@@ -6100,13 +6282,17 @@ static void findMember(EntryNav *rootNav,
           md->setBriefDescription(root->brief,root->briefFile,root->briefLine);
           md->addSectionsToDefinition(root->anchors);
           md->setMemberGroupId(root->mGrpId);
+          md->setLanguage(root->lang);
           //md->setMemberDefTemplateArguments(root->mtArgList);
           mn->append(md);
           cd->insertMember(md);
           cd->insertUsedFile(root->fileName);
           md->setRefItems(root->sli);
           if (root->relatesType == Duplicate) md->setRelatedAlso(cd);
-          addMemberToGroups(root,md);
+          if (!isDefine)
+          {
+            addMemberToGroups(root,md);
+          }
           //printf("Adding member=%s\n",md->name().data());
           if (newMemberName)
           {
@@ -6144,6 +6330,8 @@ localObjCMethod:
       //printf("scopeName=`%s' className=`%s'\n",scopeName.data(),className.data());
       if (Config_getBool("EXTRACT_LOCAL_METHODS") && (cd=getClass(scopeName)))
       {
+        Debug::print(Debug::FindMembers,0,"4. Local objective C method %s\n"
+              "  scopeName=%s className=%s\n",root->name.data(),scopeName.data(),className.data());
         //printf("Local objective C method `%s' of class `%s' found\n",root->name.data(),cd->name().data());
         MemberDef *md=new MemberDef(
             root->fileName,root->startLine,
@@ -6151,6 +6339,7 @@ localObjCMethod:
             root->protection,root->virt,root->stat,Member,
             MemberDef::Function,0,root->argList);
         md->setTagInfo(rootNav->tagInfo());
+        md->setLanguage(root->lang);
         md->makeImplementationDetail();
         md->setMemberClass(cd);
         md->setDefinition(funcDecl);
@@ -6479,6 +6668,7 @@ static void findEnums(EntryNav *rootNav)
           MemberDef::Enumeration,
           0,0);
       md->setTagInfo(rootNav->tagInfo());
+      md->setLanguage(root->lang);
       if (!isGlobal) md->setMemberClass(cd); else md->setFileDef(fd);
       md->setBodySegment(root->bodyLine,root->endBodyLine);
       md->setBodyDef(rootNav->fileDef());
@@ -6744,6 +6934,7 @@ static void addEnumValuesToEnums(EntryNav *rootNav)
                   else if (md->getFileDef()) fmd->setFileDef(md->getFileDef());
                   fmd->setOuterScope(md->getOuterScope());
                   fmd->setTagInfo(e->tagInfo());
+                  fmd->setLanguage(root->lang);
                   fmd->setDocumentation(root->doc,root->docFile,root->docLine);
                   fmd->setBriefDescription(root->brief,root->briefFile,root->briefLine);
                   fmd->addSectionsToDefinition(root->anchors);
@@ -7166,13 +7357,11 @@ static void createTemplateInstanceMembers()
 
 //----------------------------------------------------------------------------
 
-// builds the list of all members for each class
-
-static void buildCompleteMemberLists()
+static void mergeCategories()
 {
   ClassDef *cd;
-  // merge members of categories into the class they extend
   ClassSDict::Iterator cli(*Doxygen::classSDict);
+  // merge members of categories into the class they extend
   for (cli.toFirst();(cd=cli.current());++cli)
   {
     int i=cd->name().find('(');
@@ -7188,6 +7377,14 @@ static void buildCompleteMemberLists()
       }
     }
   }
+}
+
+// builds the list of all members for each class
+
+static void buildCompleteMemberLists()
+{
+  ClassDef *cd;
+  ClassSDict::Iterator cli(*Doxygen::classSDict);
   // merge the member list of base classes into the inherited classes.
   for (cli.toFirst();(cd=cli.current());++cli)
   {
@@ -7399,7 +7596,7 @@ static void generateClassList(ClassSDict &classSDict)
     //printf("cd=%s getOuterScope=%p global=%p\n",cd->name().data(),cd->getOuterScope(),Doxygen::globalScope);
     if ((cd->getOuterScope()==0 || // <-- should not happen, but can if we read an old tag file
          cd->getOuterScope()==Doxygen::globalScope // only look at global classes
-        ) && !cd->isHidden() && !cd->isEmbeddedInGroupDocs()
+        ) && !cd->isHidden() && !cd->isEmbeddedInOuterScope()
        ) 
     {
       // skip external references, anonymous compounds and 
@@ -7771,6 +7968,7 @@ static void findDefineDocumentation(EntryNav *rootNav)
                     "#define",root->name,root->args,0,
                     Public,Normal,FALSE,Member,MemberDef::Define,0,0);
       md->setTagInfo(rootNav->tagInfo());
+      md->setLanguage(root->lang);
       //printf("Searching for `%s' fd=%p\n",filePathName.data(),fd);
       md->setFileDef(rootNav->parent()->fileDef());
       //printf("Adding member=%s\n",md->name().data());
@@ -7860,6 +8058,7 @@ static void findDefineDocumentation(EntryNav *rootNav)
               md->setBodyDef(rootNav->fileDef());
               md->addSectionsToDefinition(root->anchors);
               md->setRefItems(root->sli);
+              md->setLanguage(root->lang);
               if (root->mGrpId!=-1) md->setMemberGroupId(root->mGrpId);
               addMemberToGroups(root,md);
             }
@@ -7987,7 +8186,8 @@ static void buildPageList(EntryNav *rootNav)
 
     QCString title=root->args.stripWhiteSpace();
     if (title.isEmpty()) title=theTranslator->trMainPage();
-    QCString name = Config_getBool("GENERATE_TREEVIEW")?"main":"index";
+    //QCString name = Config_getBool("GENERATE_TREEVIEW")?"main":"index";
+    QCString name = "index";
     addRefItem(root->sli,
                name,
                "page",
@@ -8012,7 +8212,8 @@ static void findMainPage(EntryNav *rootNav)
     {
       //printf("Found main page! \n======\n%s\n=======\n",root->doc.data());
       QCString title=root->args.stripWhiteSpace();
-      QCString indexName=Config_getBool("GENERATE_TREEVIEW")?"main":"index";
+      //QCString indexName=Config_getBool("GENERATE_TREEVIEW")?"main":"index";
+      QCString indexName="index";
       Doxygen::mainPage = new PageDef(root->fileName,root->startLine,
                               indexName, root->brief+root->doc+root->inbodyDocs,title);
       //setFileNameForSections(root->anchors,"index",Doxygen::mainPage);
@@ -8164,6 +8365,7 @@ static void resolveUserReferences()
     //printf("end: si->label=%s si->fileName=%s\n",si->label.data(),si->fileName.data());
   }
 }
+
 
 
 //----------------------------------------------------------------------------
@@ -8337,7 +8539,7 @@ static void generateNamespaceDocs()
              cd->templateMaster()==0
            ) // skip external references, anonymous compounds and 
              // template instances and nested classes
-           && !cd->isHidden()
+           && !cd->isHidden() && !cd->isEmbeddedInOuterScope()
          )
       {
         msg("Generating docs for compound %s...\n",cd->name().data());
@@ -8598,36 +8800,9 @@ static void readTagFile(Entry *root,const char *tl)
     msg("Reading tag file `%s'...\n",fileName.data());
 
   parseTagFile(root,fi.absFilePath(),fi.fileName());
-
 }
 
 //----------------------------------------------------------------------------
-static void copyFile(const QCString &src,const QCString &dest)
-{
-  QFile sf(src);
-  if (sf.open(IO_ReadOnly))
-  {
-    QFileInfo fi(src);
-    QFile df(dest);
-    if (df.open(IO_WriteOnly))
-    {
-      char *buffer = new char[fi.size()];
-      sf.readBlock(buffer,fi.size());
-      df.writeBlock(buffer,fi.size());
-      df.flush();
-      delete[] buffer;
-    }
-    else
-    {
-      err("error: could not write to file %s\n",dest.data());
-    }
-  }
-  else
-  {
-    err("error: could not open user specified file %s\n",src.data());
-  }
-}
-
 static void copyStyleSheet()
 {
   QCString &htmlStyleSheet = Config_getString("HTML_STYLESHEET");
@@ -8749,6 +8924,7 @@ static void parseFiles(Entry *root,EntryNav *rootNav)
     bool ambig;
     FileDef *fd=findFileDef(Doxygen::inputNameDict,fileName,ambig);
     ASSERT(fd!=0);
+    //printf("root->createNavigationIndex for %s\n",fd->name().data());
     root->createNavigationIndex(rootNav,g_storage,fd);
 
     s=g_inputFiles.next();
@@ -9220,9 +9396,9 @@ static void usage(const char *name)
   msg("   generated documentation:\n");
   msg("    %s -l layoutFileName.xml\n\n",name);
   msg("5) Use doxygen to generate a template style sheet file for RTF, HTML or Latex.\n");
-  msg("    RTF:   %s -w rtf styleSheetFile\n",name);
-  msg("    HTML:  %s -w html headerFile footerFile styleSheetFile [configFile]\n",name);
-  msg("    LaTeX: %s -w latex headerFile footerFile styleSheetFile [configFile]\n\n",name);
+  msg("    RTF:        %s -w rtf styleSheetFile\n",name);
+  msg("    HTML:       %s -w html headerFile footerFile styleSheetFile [configFile]\n",name);
+  msg("    LaTeX:      %s -w latex headerFile footerFile styleSheetFile [configFile]\n\n",name);
   msg("6) Use doxygen to generate an rtf extensions file\n");
   msg("    RTF:   %s -e rtf extensionsFile\n\n",name);
   msg("If -s is specified the comments in the config file will be omitted.\n");
@@ -9250,6 +9426,8 @@ extern void commentScanTest();
 
 void initDoxygen()
 {
+  const char *lang = portable_getenv("LC_ALL");
+  if (lang) portable_setenv("LANG",lang);
   setlocale(LC_ALL,"");
   setlocale(LC_CTYPE,"C"); // to get isspace(0xA0)==0, needed for UTF-8
   setlocale(LC_NUMERIC,"C");
@@ -9308,6 +9486,7 @@ void initDoxygen()
   Doxygen::tagDestinationDict.setAutoDelete(TRUE);
   Doxygen::lookupCache.setAutoDelete(TRUE);
   Doxygen::dirRelations.setAutoDelete(TRUE);
+  Doxygen::citeDict = new CiteDict(256);
 }
 
 void cleanUpDoxygen()
@@ -9566,9 +9745,9 @@ void readConfiguration(int argc, char **argv)
           cleanUpDoxygen();
           exit(0);
         }
-        else 
+        else
         {
-          err("error: Illegal format specifier %s: should be one of rtf, html, or latex\n",formatName);
+          err("error: Illegal format specifier %s: should be one of rtf, html, latex, or bst\n",formatName);
           cleanUpDoxygen();
           exit(1);
         }
@@ -9920,7 +10099,7 @@ void searchInputFiles(StringList &inputFiles)
     readFileOrDirectory(s,0,Doxygen::mscFileNameDict,0,0,
                         0,0,0,
                         alwaysRecursive);
-    s=dotFileList.next(); 
+    s=mscFileList.next(); 
   }
 
 
@@ -10014,7 +10193,8 @@ void parseInput()
   if (cacheSize<0) cacheSize=0;
   if (cacheSize>9) cacheSize=9;
   Doxygen::symbolCache   = new ObjCache(16+cacheSize); // 16 -> room for 65536 elements, 
-                                                //       ~2.0 MByte "overhead"
+                                                       //       ~2.0 MByte "overhead"
+  //Doxygen::symbolCache   = new ObjCache(1);  // only to stress test cache behaviour
   Doxygen::symbolStorage = new Store;
 
 #ifdef HAS_SIGNALS
@@ -10118,7 +10298,7 @@ void parseInput()
     msg("Parsing layout file %s...\n",layoutFileName.data());
     QTextStream t(&layoutFile); 
     t.setEncoding(QTextStream::Latin1);
-    LayoutDocManager::instance().parse(t);
+    LayoutDocManager::instance().parse(t,layoutFileName);
   }
   else if (!defaultLayoutUsed)
   {
@@ -10177,15 +10357,6 @@ void parseInput()
    *             Parse source files                                         * 
    **************************************************************************/
 
-  parseFiles(root,rootNav);
-  g_storage->close();
-  if (!g_storage->open(IO_ReadOnly))
-  {
-    err("Failed to open temporary storage file %s for reading",
-        Doxygen::entryDBFileName.data());
-    exit(1);
-  }
-
   //printNavTree(rootNav,0);
 
   // we are done with input scanning now, so free up the buffers used by flex
@@ -10198,6 +10369,20 @@ void parseInput()
   //g_storage.close();
   //exit(1);
 
+  if (Config_getBool("BUILTIN_STL_SUPPORT"))
+  {
+    addSTLClasses(rootNav);
+  }
+
+  parseFiles(root,rootNav);
+  g_storage->close();
+  if (!g_storage->open(IO_ReadOnly))
+  {
+    err("Failed to open temporary storage file %s for reading",
+        Doxygen::entryDBFileName.data());
+    exit(1);
+  }
+
   /**************************************************************************
    *             Gather information                                         * 
    **************************************************************************/
@@ -10209,11 +10394,6 @@ void parseInput()
   msg("Building directory list...\n");
   buildDirectories();
   findDirDocumentation(rootNav);
-
-  if (Config_getBool("BUILTIN_STL_SUPPORT"))
-  {
-    addSTLClasses(rootNav);
-  }
 
   msg("Building namespace list...\n");
   buildNamespaceList(rootNav);
@@ -10282,6 +10462,11 @@ void parseInput()
   findInheritedTemplateInstances();       
   msg("Computing class usage relations...\n");
   findUsedTemplateInstances();       
+  if (Config_getBool("INLINE_SIMPLE_STRUCTS"))
+  {
+    msg("Searching for tag less structs...\n");
+    findTagLessClasses();
+  }
 
   msg("Flushing cached template relations that have become invalid...\n");
   flushCachedTemplateRelations();
@@ -10292,12 +10477,8 @@ void parseInput()
   msg("Computing class relations...\n");
   computeTemplateClassRelations(); 
   flushUnresolvedRelations();
-
   computeClassRelations();        
-
-  if (Config_getBool("OPTIMIZE_OUTPUT_VHDL"))
-    VhdlDocGen::computeVhdlComponentRelations();
-
+  VhdlDocGen::computeVhdlComponentRelations();
   g_classEntries.clear();          
 
   msg("Add enum values to enums...\n");
@@ -10346,6 +10527,7 @@ void parseInput()
   computeMemberRelations();
 
   msg("Building full member lists recursively...\n");
+  mergeCategories();
   buildCompleteMemberLists();
   
   msg("Adding members to member groups.\n");
@@ -10386,6 +10568,12 @@ void parseInput()
     msg("Computing dependencies between directories...\n");
     computeDirDependencies();
   }
+
+  msg("Resolving citations...\n");
+  Doxygen::citeDict->resolve();
+
+  msg("Generating citations page...\n");
+  Doxygen::citeDict->generatePage();
 
   msg("Counting data structures...\n");
   countDataStructures();
@@ -10557,7 +10745,7 @@ void generateOutput()
   }
 
   //statistics();
-  
+
   // count the number of documented elements in the lists we have built. 
   // If the result is 0 we do not generate the lists and omit the 
   // corresponding links in the index.

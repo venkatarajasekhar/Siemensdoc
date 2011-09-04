@@ -65,7 +65,7 @@ class TextGeneratorIntf
   public:
     virtual ~TextGeneratorIntf() {}
     virtual void writeString(const char *,bool) const = 0;
-    virtual void writeBreak() const = 0;
+    virtual void writeBreak(int indent) const = 0;
     virtual void writeLink(const char *extRef,const char *file,
                       const char *anchor,const char *text
                      ) const = 0; 
@@ -77,7 +77,7 @@ class TextGeneratorOLImpl : public TextGeneratorIntf
     virtual ~TextGeneratorOLImpl() {}
     TextGeneratorOLImpl(OutputDocInterface &od);
     void writeString(const char *s,bool keepSpaces) const;
-    void writeBreak() const;
+    void writeBreak(int indent) const;
     void writeLink(const char *extRef,const char *file,
                    const char *anchor,const char *text
                   ) const;
@@ -99,11 +99,14 @@ enum SrcLangExt
   SrcLangExt_Cpp     = 0x0200,
   SrcLangExt_JS      = 0x0400,
   SrcLangExt_Python  = 0x0800,
-  SrcLangExt_F90     = 0x1000,
+  SrcLangExt_Fortran = 0x1000,
   SrcLangExt_VHDL    = 0x2000,
   SrcLangExt_XML     = 0x4000,
   SrcLangExt_Tcl     = 0x8000
 };
+
+QCString langToString(SrcLangExt lang);
+QCString getLanguageSpecificSeparator(SrcLangExt lang);
 
 //--------------------------------------------------------------------
 
@@ -114,7 +117,8 @@ void linkifyText(const TextGeneratorIntf &ol,
                  const char *text,
                  bool autoBreak=FALSE,
                  bool external=TRUE,
-                 bool keepSpaces=FALSE
+                 bool keepSpaces=FALSE,
+                 int indentLevel=0
                 );
 
 void setAnchors(ClassDef *cd,char id,MemberList *ml,int groupId=-1);
@@ -230,7 +234,8 @@ bool rightScopeMatch(const QCString &scope, const QCString &name);
 
 bool leftScopeMatch(const QCString &scope, const QCString &name);
 
-QCString substituteKeywords(const QCString &s,const char *title);
+QCString substituteKeywords(const QCString &s,const char *title,
+         const char *projName,const char *projNum,const char *projBrief);
 
 int getPrefixIndex(const QCString &name);
 
@@ -267,7 +272,7 @@ void addMembersToMemberGroup(/* in */     MemberList *ml,
                              /* in */     Definition *context);
 
 int extractClassNameFromType(const QCString &type,int &pos,
-                              QCString &name,QCString &templSpec);
+                              QCString &name,QCString &templSpec,SrcLangExt=SrcLangExt_Unknown);
 
 QCString substituteTemplateArgumentsInString(
        const QCString &name,
@@ -308,12 +313,13 @@ QCString escapeCharsInString(const char *name,bool allowDots,bool allowUnderscor
 void addGroupListToTitle(OutputList &ol,Definition *d);
 
 void filterLatexString(FTextStream &t,const char *str,
-                       bool insideTabbing=FALSE,bool insidePre=FALSE,
+                       bool insideTabbing=FALSE,
+                       bool insidePre=FALSE,
                        bool insideItem=FALSE);
 
 QCString rtfFormatBmkStr(const char *name);
 
-QCString linkToText(const char *link,bool isFileName);
+QCString linkToText(SrcLangExt lang,const char *link,bool isFileName);
 
 QCString stripExtension(const char *fName);
 
@@ -365,7 +371,7 @@ QCString extractAliasArgs(const QCString &args,int pos);
 
 int countAliasArguments(const QCString argList);
 
-QCString replaceAliasArguments(const QCString &aliasValue,const QCString &argList);
+//QCString replaceAliasArguments(const QCString &aliasValue,const QCString &argList);
 
 QCString resolveAliasCmd(const QCString aliasCmd);
 QCString expandAlias(const QCString &aliasName,const QCString &aliasValue);
@@ -400,6 +406,9 @@ struct ColoredImgDataItem
 
 void writeColoredImgData(const char *dir,ColoredImgDataItem data[]);
 QCString replaceColorMarkers(const char *str);
+
+bool copyFile(const QCString &src,const QCString &dest);
+QCString extractBlock(const QCString text,const QCString marker);
 
 #endif
 

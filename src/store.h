@@ -94,6 +94,10 @@ class Store : public StorageIntf
 
     void printStats();
 
+    portable_off_t pos() const { return m_cur; }
+
+    void dumpBlock(portable_off_t start,portable_off_t end);
+
   private:
     enum State
     {
@@ -109,6 +113,7 @@ class Store : public StorageIntf
     void printFreeList();
     FILE *m_file;
     portable_off_t m_front;
+    portable_off_t m_cur;
     Node *m_head;
     State m_state;
     int m_reads;

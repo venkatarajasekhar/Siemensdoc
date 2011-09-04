@@ -39,7 +39,7 @@
 #define HtmlDivEnd          QCString("</div>")
 
 
-class TranslatorPersian : public Translator
+class TranslatorPersian : public TranslatorAdapter_1_7_5
 {
   private:
   	/** Converts english digits of an input string to persian equivalents.
@@ -50,10 +50,10 @@ class TranslatorPersian : public Translator
 		const char * PersianDigits[] = { "۰", "۱", "۲", "۳", "۴", "۵", "۶", "۷", "۸", "۹" };
 		for(unsigned i=0; i<str.length(); i++)
 		{
-			if (str[i] >= '0' && str[i] <= '9')
-				output += PersianDigits[ str[i] - '0' ];
+			if (str.at(i) >= '0' && str.at(i) <= '9')
+				output += PersianDigits[ str.at(i) - '0' ];
 			else
-				output += str[i];
+				output += str.at(i);
 		}
 		
 		return output;

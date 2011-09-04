@@ -1326,6 +1326,8 @@ void Config::check()
     filePatternList.append("*.vhd");
     filePatternList.append("*.vhdl");
     filePatternList.append("*.tcl");
+    filePatternList.append("*.itcl");
+    filePatternList.append("*.tk");
     if (portable_fileSystemIsCaseSensitive())
     {
       // unix => case sensitive match => also include useful uppercase versions
@@ -1348,6 +1350,8 @@ void Config::check()
       filePatternList.append("*.VHD");
       filePatternList.append("*.VHDL");
       filePatternList.append("*.TCL");
+      filePatternList.append("*.ITCL");
+      filePatternList.append("*.TK");
     }
   }
 
