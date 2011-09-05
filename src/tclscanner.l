@@ -294,9 +294,9 @@ void tcl_cmt_proc(bool args, int line)
         if(e == NULL) return;
 
         if(args)
-                tcl.cmt_proc_temp = "\\par ProcedureArgs\n" + tcl.cmt_proc_temp;
+                tcl.cmt_proc_temp = "\\par ProcedureArgs:\n" + tcl.cmt_proc_temp;
         else
-                tcl.cmt_proc_temp = "\\par ProcedureRange\n" + tcl.cmt_proc_temp;
+                tcl.cmt_proc_temp = "\\par ProcedureRange:\n" + tcl.cmt_proc_temp;
 
         parseCommentBlock(tcl.this_parser, e, tcl.cmt_proc_temp, tcl.file_name,
                                           line, FALSE, tcl.config_autobrief,
