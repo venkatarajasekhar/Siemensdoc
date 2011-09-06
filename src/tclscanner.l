@@ -166,6 +166,7 @@ KEYWORDS [ a-zA-Z0-9:_+.-]
 ^{WHITE}*#[^%].*                                       /* discard */
 ^{WHITE}*#%{WHITE}*@history.*                          /* discard */
 ^{WHITE}*#%{WHITE}*@hide.*                             /* discard */
+^{WHITE}*#%{WHITE}*@hidden.*                           /* discard */
 
 ^{WHITE}*#%ProcedureRange{WHITE}*                      yy_push_state(CMTRANGE);
 ^{WHITE}*#%ProcedureArgs{WHITE}*                       yy_push_state(CMTARGS);
@@ -181,10 +182,10 @@ namespace{WHITE}+eval{WHITE}+{KEYWORD}+{WHITE}*/\{    { cmt_finish(yylineno); cm
 class{WHITE}+{KEYWORD}+{WHITE}*/\{                    { cmt_finish(yylineno); cmt_class(yytext, yylineno); }
 inherit{WHITE}+{KEYWORDS}*                              cmt_inherit(yytext, yylineno);
 
-{WHITE}*(constructor|destructor){WHITE}*/\{                                                        { yy_push_state(FUNCARGS); tcl_func_name(yytext); yyless(strlen(yytext)-1); }
-{WHITE}*(public|private|protected){0,1}{WHITE}*(body|proc|method){WHITE}+[^ \t\n\{\}]+{WHITE}+/\{  { cmt_finish(yylineno); yy_push_state(FUNCARGS); tcl_func_name(yytext); }
+(constructor|destructor){WHITE}*/\{                                                        { yy_push_state(FUNCARGS); tcl_func_name(yytext); yyless(strlen(yytext)-1); }
+(public|private|protected){0,1}{WHITE}*(body|proc|method){WHITE}+[^ \t\n\{\}]+{WHITE}+/\{  { cmt_finish(yylineno); yy_push_state(FUNCARGS); tcl_func_name(yytext); }
 
-{WHITE}*(public|private|protected){0,1}{WHITE}*variable{WHITE}+{KEYWORD}+[ \t\n]              { tcl_var_name(yytext, yylineno); }
+(public|private|protected){0,1}{WHITE}*variable{WHITE}+{KEYWORD}+[ \t\n]                   { tcl_var_name(yytext, yylineno); }
 
 <FUNCARGS>.*\n              { tcl_func_args(yytext, yylineno); }
 
@@ -198,7 +199,7 @@ inherit{WHITE}+{KEYWORDS}*                              cmt_inherit(yytext, yyli
 <CMTARGS>#%End.*\n          { tcl_cmt_proc(true, yylineno); yy_pop_state(); }
 <CMTARGS>#%ProcedureRange{WHITE}*\n   { tcl_cmt_proc(true, yylineno); yy_pop_state(); yyless(0); }
 
-<*>.|\n                 /* discard */;
+<*>.|\n                                                /* discard ! must be last ! */
 
 %%
 //------------------------------------------------------------
@@ -238,11 +239,13 @@ void tcl_merge_entry(Entry* e1, Entry* e2)
 void cmt_briefdesc(QCString txt)
 {
 //fprintf(stdout,"cmt_briefdesc: txt: '%s'\n", (const char*)txt);
-        txt = txt.simplifyWhiteSpace();                 // remove white spaces inside and outside
-        txt.remove(0,2);                                // remove #%
-        txt = txt.stripWhiteSpace();                    // remove whitespaces
-	if (txt.isEmpty()) return;                      // !txt.remove crashes on null string!
-	if (tcl.cmt_store_temp.isEmpty()) {tcl.cmt_store_temp += "@brief";}   // per default it's a brief description
+        txt = txt.simplifyWhiteSpace();                             // remove white spaces inside and outside
+        txt.remove(0,2);                                            // remove #%
+        txt = txt.stripWhiteSpace();                                // remove whitespaces
+	if (txt.isEmpty()) return;                                  // !txt.remove crashes on null string!
+	if (tcl.cmt_store_temp.isEmpty()) {tcl.cmt_store_temp += "@brief";}      // per default it's a brief description
+        txt.replace(QCString("@copyright "), QCString("@details @copyright "));  // we want the copyright to always be in the details section
+        txt.replace(QCString("@detail "), QCString("@details "));                // error correct
         tcl.cmt_store_temp += "\n" + txt;
 }
 
@@ -263,7 +266,7 @@ void cmt_finish(int line)
                                 FALSE, tcl.protection, pos, newentry)) {
 
              if(newentry) {
-                    fprintf(stdout,"New Entry! |%d|\n",line);
+                    //fprintf(stdout,"New Entry! |%d|\n",line);
                     newentry = false;
                     tcl.e_inside->addSubEntry(tcl.e_current);
                     tcl.e_current = tcl_entry_new();
@@ -271,7 +274,7 @@ void cmt_finish(int line)
         }
 
         if(newentry) {
-                fprintf(stdout,"New Entry! |%d|\n",line);
+                //fprintf(stdout,"New Entry! |%d|\n",line);
                 tcl.e_inside->addSubEntry(tcl.e_current);
                 tcl.e_current = tcl_entry_new();
         }
@@ -340,7 +343,7 @@ void tcl_block_end(tcl_context* context, int line)
 //! inits new namespace
 void cmt_namespace(QCString txt, int line)
 {
-fprintf(stdout,"cmt_namespace: txt: '%s'\n", (const char*)txt);
+//fprintf(stdout,"cmt_namespace: txt: '%s'\n", (const char*)txt);
         QCString parent;
         int index;
         Entry* e;
@@ -423,12 +426,11 @@ const char* rstripchar(QCString txt, char c) {
 //! inits new class entry
 void cmt_class(QCString txt, int line)
 {
-fprintf(stderr,"cmt_class: '%s'\n",(const char*)txt);
+//fprintf(stderr,"cmt_class: '%s'\n",(const char*)txt);
 	// remove "class" so that name stands alone
 	txt = txt.stripWhiteSpace();
 	txt.remove(0,5); // class = 5 characters
 	txt = txt.stripWhiteSpace();
-
         //create new context
         tcl.t_current = new tcl_context();
         tcl.t_current->e_inside = tcl.e_inside;
@@ -461,7 +463,7 @@ fprintf(stderr,"cmt_class: '%s'\n",(const char*)txt);
 //! handles inheritance relation between classes
 void cmt_inherit(QCString txt, int line)
 {
-fprintf(stderr,"cmt_inherit: '%s'\n",(const char*)txt);
+//fprintf(stderr,"cmt_inherit: '%s'\n",(const char*)txt);
         QRegExp white("[ \\t]");
         BaseInfo *inf;
         Entry *e = tcl.stack.top()->e_current;
@@ -583,7 +585,7 @@ void tcl_var_name(QCString txt, int line)
 //! handles function analysing
 void tcl_func_name(QCString txt)
 {
-fprintf(stderr,"tcl_func_name: txt: '%s'\n",(const char*)txt);
+//fprintf(stderr,"tcl_func_name: txt: '%s'\n",(const char*)txt);
         QCString prot, typ, name, parent;
         QRegExp white("[ \\t]");
         QRegExp letter("[^ \\t]");
