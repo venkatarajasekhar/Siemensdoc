@@ -1,0 +1,8 @@
+#!/bin/sh
+
+rm -r /cmdata/www/doxy-test/*
+../bin/doxygen doxyfile.test
+cp -r doxy-out/test/html/* /cmdata/www/doxy-test/
+chown -R www-data:www-data /cmdata/www/doxy-test
+chmod -R go-rwx /cmdata/www/doxy-test
+
