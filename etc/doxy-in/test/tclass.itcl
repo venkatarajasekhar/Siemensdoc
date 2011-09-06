@@ -5,7 +5,6 @@ class parentclass1 {
 class parentclass2 {
 }
 
-#% @class basic-test
 #% beschreibung der basic-test klasse
 #% @details Description about the xbasic class.
 #% @copyright (c) by Siemens AG Oesterreich 2011
